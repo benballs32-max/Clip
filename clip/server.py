@@ -10,8 +10,8 @@ from fastapi import Body, FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import assets, briefs, config, store
-from .pipeline import process_source
+from . import assets, briefs, config, store, youtube
+from .pipeline import process_source, process_youtube
 
 app = FastAPI(title="Clip")
 jobs: dict[str, dict] = {}
@@ -137,6 +137,23 @@ def analyze_brief(cid: str):
         raise HTTPException(502, f"Claude couldn't read the brief: {e}")
 
 
+@app.post("/api/campaigns/{cid}/youtube")
+def add_youtube(cid: str, body: dict = Body(...)):
+    _campaign(cid)
+    try:
+        vid, url = youtube.normalize(body.get("url", ""))
+        meta = youtube.info(url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"YouTube lookup failed: {str(e)[:200]}")
+    asset = {"path": f"youtube:{vid}", "kind": "youtube", "role": "source", "url": url,
+             "title": meta["title"], "channel": meta["channel"], "license": meta["license"],
+             "duration": float(meta["duration"]), "width": 0, "height": 0, "alpha": False, "size": 0}
+    store.upsert_asset(cid, asset)
+    return asset
+
+
 def _run_job(job_id: str, cid: str) -> None:
     job = jobs[job_id]
     try:
@@ -144,11 +161,18 @@ def _run_job(job_id: str, cid: str) -> None:
         pick = lambda role: next((_asset_file(cid, a["path"]) for a in campaign["assets"] if a["role"] == role
                                   and a["kind"] == ("audio" if role == "music" else "image")), None)
         logo, music = pick("logo"), pick("music")
-        todo = [a for a in campaign["assets"] if a["kind"] == "video" and a["role"] == "source"
+        todo = [a for a in campaign["assets"] if a["kind"] in ("video", "youtube") and a["role"] == "source"
                 and a["path"] not in campaign["sources_done"]]
         if not todo:
             job["log"].append("No new source videos to process.")
+        log = lambda m: job["log"].append(m)
         for a in todo:
+            if a["kind"] == "youtube":
+                clips = process_youtube(a["url"], a["path"].split(":", 1)[1], a["title"],
+                                        store.cdir(cid) / "_work", store.cdir(cid) / "clips",
+                                        campaign, progress=log, logo=logo, music=music)
+                store.add_clips(cid, a["path"], clips)
+                continue
             clips = process_source(_asset_file(cid, a["path"]), a["path"], store.cdir(cid) / "clips",
                                    campaign, progress=lambda m: job["log"].append(m),
                                    logo=logo, music=music)

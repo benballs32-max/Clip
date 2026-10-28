@@ -1,0 +1,132 @@
+"""YouTube sources via yt-dlp: metadata, captions as transcript, section-only downloads."""
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+import yt_dlp
+from yt_dlp.utils import download_range_func
+
+HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
+ID_RE = re.compile(r"^[\w-]{11}$")
+
+
+def normalize(url: str) -> tuple[str, str]:
+    """Return (video_id, canonical_url). Only plain YouTube video links are accepted."""
+    u = urlparse(url.strip())
+    if u.scheme not in ("http", "https") or u.hostname not in HOSTS:
+        raise ValueError("That doesn't look like a YouTube video link.")
+    if u.hostname == "youtu.be":
+        vid = u.path.strip("/").split("/")[0]
+    elif u.path == "/watch":
+        vid = (parse_qs(u.query).get("v") or [""])[0]
+    else:  # /shorts/ID, /live/ID, /embed/ID
+        parts = [p for p in u.path.split("/") if p]
+        vid = parts[1] if len(parts) >= 2 and parts[0] in ("shorts", "live", "embed") else ""
+    if not ID_RE.match(vid):
+        raise ValueError("Couldn't find a video ID in that link (playlists and channels aren't supported).")
+    return vid, f"https://www.youtube.com/watch?v={vid}"
+
+
+def _opts(**extra) -> dict:
+    deno = Path(sys.executable).parent / "deno"
+    opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "retries": 3,
+            "js_runtimes": {"deno": {"path": str(deno)} if deno.exists() else {}}}
+    opts.update(extra)
+    return opts
+
+
+def info(url: str) -> dict:
+    with yt_dlp.YoutubeDL(_opts()) as ydl:
+        d = ydl.extract_info(url, download=False)
+    return {"id": d["id"], "title": d.get("title", d["id"]), "duration": d.get("duration") or 0,
+            "channel": d.get("channel") or d.get("uploader") or "", "license": d.get("license") or ""}
+
+
+def _parse_json3(data: dict) -> list[dict]:
+    """Caption events -> word list [{start,end,word}]. Auto captions carry per-word offsets."""
+    words = []
+    for ev in data.get("events", []):
+        segs = [s for s in ev.get("segs", []) if s.get("utf8", "").strip()]
+        if not segs:
+            continue
+        t0, dur = ev.get("tStartMs", 0), ev.get("dDurationMs", 0)
+        toks = [(w, s.get("tOffsetMs")) for s in segs for w in s["utf8"].split()]
+        timed = any(off for _, off in toks)
+        for i, (w, off) in enumerate(toks):
+            ms = t0 + (off or 0) if timed else t0 + dur * i // max(len(toks), 1)
+            words.append({"start": ms / 1000, "end": ms / 1000, "word": w})
+    out, last = [], -1.0
+    for w in sorted(words, key=lambda w: w["start"]):
+        if w["start"] >= last - 0.05:
+            out.append(w)
+            last = w["start"]
+    for a, b in zip(out, out[1:]):
+        a["end"] = min(b["start"], a["start"] + 1.0) or a["start"] + 0.3
+    if out:
+        out[-1]["end"] = out[-1]["start"] + 0.4
+    return out
+
+
+def _segments(words: list[dict]) -> list[dict]:
+    """Group words into phrase-sized segments with word timings (same shape as Whisper's)."""
+    segs, cur = [], []
+    for w in words:
+        if cur and (len(cur) >= 14 or w["start"] - cur[-1]["end"] > 1.2
+                    or (len(cur) >= 8 and cur[-1]["word"][-1] in ".?!")):
+            segs.append(cur)
+            cur = []
+        cur.append(w)
+    if cur:
+        segs.append(cur)
+    return [{"start": s[0]["start"], "end": s[-1]["end"], "text": " ".join(x["word"] for x in s),
+             "words": s} for s in segs]
+
+
+def transcript(url: str, vid: str, work: Path) -> list[dict] | None:
+    """Transcript from YouTube's own captions, or None if there are none."""
+    work.mkdir(parents=True, exist_ok=True)
+    cache = work / f"{vid}.transcript.json"
+    if cache.exists():
+        return json.loads(cache.read_text())
+    for auto in (True, False):  # auto captions have per-word timing, so try them first
+        for old in work.glob(f"{vid}.cap.*"):
+            old.unlink()
+        try:
+            with yt_dlp.YoutubeDL(_opts(
+                    skip_download=True, writeautomaticsub=auto, writesubtitles=not auto,
+                    subtitleslangs=["en-orig", "en"] if auto else ["en"], subtitlesformat="json3",
+                    outtmpl=str(work / f"{vid}.cap.%(ext)s"))) as ydl:
+                ydl.download([url])
+        except Exception:
+            continue
+        files = sorted(work.glob(f"{vid}.cap.*.json3"))
+        if files:
+            segs = _segments(_parse_json3(json.loads(files[0].read_text())))
+            if segs:
+                cache.write_text(json.dumps(segs))
+                return segs
+    return None
+
+
+def download_audio(url: str, vid: str, work: Path) -> Path:
+    work.mkdir(parents=True, exist_ok=True)
+    with yt_dlp.YoutubeDL(_opts(format="bestaudio[ext=m4a]/bestaudio/best",
+                                outtmpl=str(work / f"{vid}.audio.%(ext)s"))) as ydl:
+        ydl.download([url])
+    return next(work.glob(f"{vid}.audio.*"))
+
+
+def download_section(url: str, start: float, end: float, dest: Path) -> Path:
+    """Download just [start, end] seconds, up to 1080p, as dest (.mp4)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.unlink(missing_ok=True)
+    with yt_dlp.YoutubeDL(_opts(
+            format="bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]",
+            merge_output_format="mp4", download_ranges=download_range_func(None, [(start, end)]),
+            force_keyframes_at_cuts=True, outtmpl=str(dest.with_suffix(".%(ext)s")))) as ydl:
+        ydl.download([url])
+    return dest

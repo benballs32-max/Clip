@@ -57,6 +57,7 @@ async function open(id) {
     </form>
     <h3>Assets</h3>
     <div class="drop" id="drop">Drop a <b>folder</b> or files here: footage, trailers, logos, music, briefs<div class="row" style="justify-content:center"><button type="button" id="pickDir">Choose folder</button><button type="button" id="pickFiles">Choose files</button></div><input id="dirIn" type="file" webkitdirectory multiple hidden><input id="fileIn" type="file" multiple hidden></div>
+    <div class="row"><input id="yt" placeholder="…or paste a YouTube link (only videos the campaign lets you use)" style="flex:1;max-width:560px"><button id="ytBtn">Add video</button></div>
     <div class="stats" id="status"></div>
     ${assetTable(c)}
     <div class="row"><button class="primary" id="gen">Generate clips</button></div>
@@ -113,6 +114,14 @@ function bind(c) {
       await open(c.id); await analyze(c.id);
     } catch (e) { msg.textContent = e.message; }
   };
+  $("#ytBtn").onclick = async () => {
+    const st = $("#status"), btn = $("#ytBtn");
+    btn.disabled = true; st.textContent = "Looking up video…";
+    try {
+      await api(`/api/campaigns/${c.id}/youtube`, { method: "POST", body: { url: $("#yt").value } });
+      await open(c.id);
+    } catch (e) { st.textContent = e.message; btn.disabled = false; }
+  };
   if ($("#reread")) $("#reread").onclick = () => analyze(c.id);
   document.querySelectorAll(".role").forEach(sel => sel.onchange = async () => {
     await api(`/api/campaigns/${c.id}/assets`, { method: "PATCH", body: { path: sel.dataset.path, role: sel.value } });
@@ -133,7 +142,7 @@ function bind(c) {
 }
 
 const ROLES = ["source", "logo", "music", "image", "brief", "ignore"];
-const ICON = { video: "🎞", image: "🖼", audio: "🎵", doc: "📄", other: "❔" };
+const ICON = { youtube: "▶️", video: "🎞", image: "🖼", audio: "🎵", doc: "📄", other: "❔" };
 const fmt = n => n > 1e9 ? (n / 1e9).toFixed(1) + " GB" : n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.ceil(n / 1e3) + " KB";
 const dur = t => t >= 60 ? `${Math.floor(t / 60)}m${Math.round(t % 60)}s` : `${Math.round(t)}s`;
 
@@ -142,7 +151,8 @@ function assetTable(c) {
   const rows = c.assets.map(a => {
     const detail = [a.duration ? dur(a.duration) : "", a.width ? `${a.width}×${a.height}` : "", a.alpha ? "transparent" : "", fmt(a.size)].filter(Boolean).join(" · ");
     const done = c.sources_done.includes(a.path) ? " ✓" : "";
-    return `<tr><td>${ICON[a.kind]} ${esc(a.path)}${done}</td><td class="stats">${detail}</td>
+    const label = a.kind === "youtube" ? `${esc(a.title)} <span class="stats">(${esc(a.channel)})</span>` : esc(a.path);
+    return `<tr><td>${ICON[a.kind]} ${label}${done}</td><td class="stats">${detail}</td>
       <td><select class="role" data-path="${esc(a.path)}">${ROLES.map(r => `<option ${r===a.role?"selected":""}>${r}</option>`).join("")}</select></td>
       <td><button class="rm danger" data-path="${esc(a.path)}">✕</button></td></tr>`;
   }).join("");
