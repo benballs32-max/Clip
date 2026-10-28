@@ -11,9 +11,9 @@ SPEECH_WPM = 25  # below this many words/minute a video is treated as visual foo
 
 
 def caption_text(clip: dict, campaign: dict) -> str:
-    tags = " ".join(campaign.get("hashtags", []))
     disclosure = campaign.get("disclosure", "#ad")
-    return "\n".join(x for x in [clip.get("caption", ""), f"{tags} {disclosure}".strip()] if x)
+    tags = [t for t in campaign.get("hashtags", []) if t.lower() != disclosure.lower()]
+    return "\n".join(x for x in [clip.get("caption", ""), " ".join(tags + [disclosure]).strip()] if x)
 
 
 def _pretty(rel: str) -> str:
