@@ -31,3 +31,7 @@ pre.log{background:#0a0c10;border:1px solid var(--line);border-radius:8px;paddin
 .clip.approved{outline:2px solid var(--ok)}.clip.rejected{opacity:.45}.clip.posted{outline:2px solid var(--accent)}
 .clip b{font-size:13px}.clip p{margin:0;color:var(--mute);font-size:12px;white-space:pre-wrap}
 .stats{color:var(--mute)}.stats b{color:var(--text)}
+table.assets{border-collapse:collapse;width:100%;max-width:860px}
+table.assets td{padding:5px 8px;border-bottom:1px solid var(--line)}
+table.assets select{padding:3px}
+table.assets button{padding:2px 8px}

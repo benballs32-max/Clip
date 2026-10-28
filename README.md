@@ -2,7 +2,15 @@
 
 Local web app for turning long videos into captioned vertical clips for pay-per-view clipping campaigns.
 
-Add a campaign in the sidebar, upload its footage, and hit **Generate**. Each video is:
+Add a campaign in the sidebar, drop in its brief and assets, and hit **Generate**.
+
+**Brief:** drop a PDF / Word / text file, or paste a link-shared Google Docs URL. Claude reads it and pre-fills the rules, hashtags, disclosure tag, lengths and rate for you to check and save.
+
+**Assets:** drop whole folders. Files are sorted by type and given a role you can change:
+`source` (clipped), `logo` (watermark on every clip), `music` (mixed under the audio), `brief` (read for rules), `image` / `ignore` (unused).
+Videos with speech go through transcript-based highlighting; videos with little speech (trailers, cinematics) are cut at scene changes instead.
+
+Each source video is:
 
 1. transcribed locally (faster-whisper, word timestamps)
 2. scanned by Claude for the best 15-60s moments, using the campaign's rules
