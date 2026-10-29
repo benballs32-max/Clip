@@ -1,7 +1,7 @@
 :root{--bg:#0f1115;--panel:#171a21;--line:#262b36;--text:#e8eaf0;--mute:#8a92a6;--accent:#ffb800;--ok:#3ecf8e;--bad:#ff5d5d}
 *{box-sizing:border-box}
 body{margin:0;display:flex;height:100vh;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,system-ui,sans-serif}
-aside{width:250px;background:var(--panel);border-right:1px solid var(--line);padding:16px;display:flex;flex-direction:column;gap:12px}
+aside{width:290px;background:var(--panel);border-right:1px solid var(--line);padding:16px;display:flex;flex-direction:column;gap:12px}
 aside h1{margin:0;font-size:18px}
 nav{flex:1;overflow:auto;display:flex;flex-direction:column;gap:4px}
 nav a{padding:9px 11px;border-radius:8px;color:var(--text);cursor:pointer;display:block}
@@ -45,3 +45,25 @@ table.assets button{padding:2px 8px}
 .bar div{height:100%;background:var(--accent);border-radius:99px;transition:width .6s}
 .bar.indet div{animation:slide 1.4s ease-in-out infinite alternate}
 @keyframes slide{from{margin-left:0}to{margin-left:65%}}
+
+/* sidebar tree: campaign > content */
+.camp{margin-bottom:6px}
+nav a.ch{display:flex;align-items:center;gap:2px;padding:7px 8px}
+nav a .t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.caret{background:none;border:0;color:var(--mute);padding:2px 6px;cursor:pointer;font-size:12px}
+.caret:hover{color:var(--text);border:0}
+.items{margin:2px 0 4px 14px;border-left:1px solid var(--line);padding-left:6px;display:flex;flex-direction:column;gap:2px}
+nav a.ci{display:flex;align-items:center;gap:6px;padding:6px 8px;font-size:13px}
+nav a.ci small{display:inline;color:var(--mute)}
+.addc{background:none;border:1px dashed var(--line);color:var(--mute);margin-top:4px;padding:6px;font-size:12px;text-align:left}
+.addc:hover{color:var(--text)}
+.dot{color:var(--accent);animation:pulse .9s ease-in-out infinite alternate}
+@keyframes pulse{from{opacity:.3}to{opacity:1}}
+.crumb{color:var(--mute);text-decoration:none;font-size:12px}
+.crumb:hover{color:var(--text)}
+.page{max-width:860px}
+.crow{display:block;padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;color:var(--text);text-decoration:none;background:var(--panel)}
+.crow:hover{border-color:var(--accent)}
+.mini{padding:0 8px;font-size:14px;vertical-align:middle}
+.srcinfo{padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;max-width:760px}
+.srcinfo a{color:var(--accent)}

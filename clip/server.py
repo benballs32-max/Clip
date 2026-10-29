@@ -1,4 +1,4 @@
-"""FastAPI app: campaigns, uploads, background generation, clip review."""
+"""FastAPI app: campaigns (brief + settings), content items (one video each), generation, clip review."""
 import re
 import shutil
 import threading
@@ -14,6 +14,7 @@ from . import assets, briefs, config, store, youtube
 from .pipeline import process_source, process_youtube
 
 app = FastAPI(title="Clip")
+store.migrate_all()  # old flat layout -> content items (backs up campaign.json first)
 
 
 @app.middleware("http")
@@ -24,6 +25,7 @@ async def no_stale_cache(request, call_next):
         resp.headers["Cache-Control"] = "no-cache"
     return resp
 
+
 jobs: dict[str, dict] = {}
 
 
@@ -33,6 +35,15 @@ def _campaign(cid: str) -> dict:
     except KeyError:
         raise HTTPException(404, "Campaign not found")
 
+
+def _content(cid: str, xid: str) -> dict:
+    try:
+        return store.get_content(cid, xid)
+    except KeyError:
+        raise HTTPException(404, "Content not found")
+
+
+# ---------------- campaigns ----------------
 
 @app.get("/api/campaigns")
 def list_campaigns():
@@ -60,9 +71,13 @@ def patch_campaign(cid: str, body: dict = Body(...)):
 @app.delete("/api/campaigns/{cid}")
 def delete_campaign(cid: str):
     _campaign(cid)
+    if any(j["cid"] == cid and j["state"] == "running" for j in jobs.values()):
+        raise HTTPException(409, "A job is running for this campaign")
     store.delete(cid)
     return {"ok": True}
 
+
+# ---------------- paths ----------------
 
 def _safe_rel(raw: str) -> str:
     """Relative upload path: no traversal, no hidden files, plain characters only."""
@@ -72,16 +87,31 @@ def _safe_rel(raw: str) -> str:
     return "/".join(re.sub(r"[^\w .\-()&,'+@]", "_", p)[:120] for p in parts)
 
 
-def _asset_file(cid: str, rel: str) -> Path:
-    root = (store.cdir(cid) / "assets").resolve()
+def _inside(cid: str, sub: str, rel: str) -> Path:
+    root = (store.cdir(cid) / sub).resolve()
     path = (root / rel).resolve()
     if root not in path.parents:
         raise HTTPException(400, "Bad path")
     return path
 
 
+def _asset_file(cid: str, rel: str) -> Path:
+    return _inside(cid, "assets", rel)
+
+
+def _content_file(cid: str, rel: str) -> Path:
+    """A content item's video: 'content/<id>/name.mp4' (new) or 'assets/name.mp4' (migrated)."""
+    top, _, rest = rel.partition("/")
+    if top not in ("content", "assets") or not rest:
+        raise HTTPException(400, "Bad path")
+    return _inside(cid, top, rest)
+
+
+# ---------------- shared assets: brief files, logo, music ----------------
+
 @app.post("/api/campaigns/{cid}/assets")
 async def upload_asset(cid: str, file: UploadFile, path: str = Form("")):
+    """Brief documents, logos and music. A video dropped here becomes its own content item."""
     _campaign(cid)
     rel = _safe_rel(path or file.filename or "file")
     dest = _asset_file(cid, rel)
@@ -89,6 +119,11 @@ async def upload_asset(cid: str, file: UploadFile, path: str = Form("")):
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
     info = assets.classify(dest, rel)
+    if info["kind"] == "video":
+        item = store.create_content(cid, Path(rel).stem.replace("_", " "), {
+            "kind": "video", "file": f"assets/{rel}", "duration": info["duration"],
+            "width": info["width"], "height": info["height"], "size": info["size"]})
+        return {**info, "content": item}
     store.upsert_asset(cid, info)
     return info
 
@@ -147,9 +182,49 @@ def analyze_brief(cid: str):
         raise HTTPException(502, f"Claude couldn't read the brief: {e}")
 
 
-@app.post("/api/campaigns/{cid}/youtube")
-def add_youtube(cid: str, body: dict = Body(...)):
+# ---------------- content items ----------------
+
+@app.post("/api/campaigns/{cid}/content")
+def create_content(cid: str, body: dict = Body(...)):
     _campaign(cid)
+    return store.create_content(cid, str(body.get("title", "")))
+
+
+@app.patch("/api/campaigns/{cid}/content/{xid}")
+def rename_content(cid: str, xid: str, body: dict = Body(...)):
+    _content(cid, xid)
+    if not str(body.get("title", "")).strip():
+        raise HTTPException(400, "Title required")
+    return store.update_content(cid, xid, {"title": body["title"]})
+
+
+@app.delete("/api/campaigns/{cid}/content/{xid}")
+def delete_content(cid: str, xid: str):
+    item = _content(cid, xid)
+    if any(j["cid"] == cid and j.get("xid") == xid and j["state"] == "running" for j in jobs.values()):
+        raise HTTPException(409, "Generation is running for this content")
+    for c in item["clips"]:  # the clips and their caption files
+        for ext in (".mp4", ".txt"):
+            (store.cdir(cid) / "clips" / Path(c["file"]).with_suffix(ext).name).unlink(missing_ok=True)
+    if item.get("file"):
+        try:
+            _content_file(cid, item["file"]).unlink(missing_ok=True)
+        except HTTPException:
+            pass
+    shutil.rmtree(store.cdir(cid) / "content" / xid, ignore_errors=True)
+    store.delete_content(cid, xid)
+    return {"ok": True}
+
+
+def _default_title(item: dict) -> bool:
+    return item["title"] == "Untitled content"
+
+
+@app.post("/api/campaigns/{cid}/content/{xid}/youtube")
+def content_youtube(cid: str, xid: str, body: dict = Body(...)):
+    item = _content(cid, xid)
+    if item.get("kind"):
+        raise HTTPException(409, "This content already has a source. Add a new content item instead.")
     try:
         vid, url = youtube.normalize(body.get("url", ""))
         meta = youtube.info(url)
@@ -157,14 +232,37 @@ def add_youtube(cid: str, body: dict = Body(...)):
         raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(502, f"YouTube lookup failed: {str(e)[:200]}")
-    asset = {"path": f"youtube:{vid}", "kind": "youtube", "role": "source", "url": url,
-             "title": meta["title"], "channel": meta["channel"], "license": meta["license"],
-             "duration": float(meta["duration"]), "width": 0, "height": 0, "alpha": False, "size": 0}
-    store.upsert_asset(cid, asset)
-    return asset
+    fields = {"kind": "youtube", "url": url, "yt_title": meta["title"], "channel": meta["channel"],
+              "license": meta["license"], "duration": float(meta["duration"])}
+    if _default_title(item):
+        fields["title"] = meta["title"]
+    return store.update_content(cid, xid, fields)
 
 
-def _run_job(job_id: str, cid: str, redo: bool = False) -> None:
+@app.post("/api/campaigns/{cid}/content/{xid}/file")
+async def content_file(cid: str, xid: str, file: UploadFile):
+    item = _content(cid, xid)
+    if item.get("kind"):
+        raise HTTPException(409, "This content already has a source. Add a new content item instead.")
+    name = _safe_rel(file.filename or "video.mp4").split("/")[-1]
+    if assets.kind_of(Path(name)) != "video":
+        raise HTTPException(400, "That isn't a video file (mp4, mov, mkv, webm, m4v, avi).")
+    rel = f"content/{xid}/{name}"
+    dest = _content_file(cid, rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    info = assets.classify(dest, name)
+    fields = {"kind": "video", "file": rel, "duration": info["duration"], "width": info["width"],
+              "height": info["height"], "size": info["size"]}
+    if _default_title(item):
+        fields["title"] = Path(name).stem.replace("_", " ")
+    return store.update_content(cid, xid, fields)
+
+
+# ---------------- generation ----------------
+
+def _run_job(job_id: str, cid: str, xid: str) -> None:
     job = jobs[job_id]
 
     def log(msg: str, pct=None) -> None:
@@ -173,47 +271,45 @@ def _run_job(job_id: str, cid: str, redo: bool = False) -> None:
         job["percent"] = pct
 
     try:
-        campaign = store.get(cid)
+        campaign, item = store.get(cid), store.get_content(cid, xid)
         pick = lambda role: next((_asset_file(cid, a["path"]) for a in campaign["assets"] if a["role"] == role
                                   and a["kind"] == ("audio" if role == "music" else "image")), None)
         logo, music = pick("logo"), pick("music")
-        todo = [a for a in campaign["assets"] if a["kind"] in ("video", "youtube") and a["role"] == "source"
-                and (redo or a["path"] not in campaign["sources_done"])]
-
-        def made_from(a):  # clips already produced from this source (older clips lack src_key)
-            vid = a["path"].split(":", 1)[1] if a["kind"] == "youtube" else None
-            return [c for c in campaign["clips"] if c.get("src_key") == a["path"] or c["source"] == a["path"]
-                    or (vid and vid in c["source"])]
-        if not todo:
-            log("No new source videos to process.")
-        for n, a in enumerate(todo, 1):
-            log(f"Source {n}/{len(todo)}: {a.get('title') or a['path']}")
-            if a["kind"] == "youtube":
-                clips = process_youtube(a["url"], a["path"].split(":", 1)[1], a["title"],
-                                        store.cdir(cid) / "_work", store.cdir(cid) / "clips",
-                                        campaign, progress=log, logo=logo, music=music, existing=made_from(a))
-            else:
-                clips = process_source(_asset_file(cid, a["path"]), a["path"], store.cdir(cid) / "clips",
-                                       campaign, progress=log, logo=logo, music=music, existing=made_from(a))
-            store.add_clips(cid, a["path"], clips)
-            log(f"Finished: {len(clips)} clips.")
+        out_dir, existing = store.cdir(cid) / "clips", item["clips"]
+        log(f"Content: {item['title']}" + (f" ({len(existing)} clips already made)" if existing else ""))
+        if item["kind"] == "youtube":
+            vid, url = youtube.normalize(item["url"])
+            clips = process_youtube(url, vid, item.get("yt_title") or item["title"], store.cdir(cid) / "_work",
+                                    out_dir, campaign, progress=log, logo=logo, music=music, existing=existing)
+        elif item["kind"] == "video":
+            src = _content_file(cid, item["file"])
+            clips = process_source(src, f"{xid}_{src.stem}", out_dir, campaign, progress=log,
+                                   logo=logo, music=music, existing=existing)
+        else:
+            raise RuntimeError("Add a video or YouTube link to this content first.")
+        for c in clips:
+            c["content"] = xid
+        store.add_clips(cid, xid, clips)
         job["state"] = "done"
-        log("All done.", 100)
+        log(f"Finished: {len(clips)} new clips.", 100)
     except Exception as e:  # surface any failure in the UI
         job["state"], job["error"] = "error", str(e)
         log(f"ERROR: {e}")
     job["finished"] = time.time()
 
 
-@app.post("/api/campaigns/{cid}/generate")
-def generate(cid: str, redo: bool = False):
-    _campaign(cid)
-    if any(j["cid"] == cid and j["state"] == "running" for j in jobs.values()):
-        raise HTTPException(409, "Already running")
+@app.post("/api/campaigns/{cid}/content/{xid}/generate")
+def generate(cid: str, xid: str):
+    item = _content(cid, xid)
+    if not item.get("kind"):
+        raise HTTPException(400, "Add a video or YouTube link first.")
+    busy = next((j for j in jobs.values() if j["state"] == "running"), None)
+    if busy:  # the server has two cores: one job at a time
+        raise HTTPException(409, f"Another job is running ({busy.get('title', 'content')}). Wait for it to finish.")
     job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {"id": job_id, "cid": cid, "state": "running", "log": [], "percent": None,
-                    "started": time.time(), "finished": None}
-    threading.Thread(target=_run_job, args=(job_id, cid, redo), daemon=True).start()
+    jobs[job_id] = {"id": job_id, "cid": cid, "xid": xid, "title": item["title"], "state": "running",
+                    "log": [], "percent": None, "started": time.time(), "finished": None}
+    threading.Thread(target=_run_job, args=(job_id, cid, xid), daemon=True).start()
     return {"job": job_id}
 
 
@@ -228,16 +324,25 @@ def job_status(job_id: str):
     return _view(jobs[job_id])
 
 
-@app.get("/api/campaigns/{cid}/job")
-def latest_job(cid: str):
-    mine = [j for j in jobs.values() if j["cid"] == cid]
+@app.get("/api/campaigns/{cid}/content/{xid}/job")
+def latest_job(cid: str, xid: str):
+    mine = [j for j in jobs.values() if j["cid"] == cid and j.get("xid") == xid]
     return _view(max(mine, key=lambda j: j["started"])) if mine else {}
 
 
-@app.patch("/api/campaigns/{cid}/clips/{filename}")
-def patch_clip(cid: str, filename: str, body: dict = Body(...)):
+@app.get("/api/running")
+def running():
+    """Which content (if any) is being processed, so the sidebar can show it."""
+    j = next((j for j in jobs.values() if j["state"] == "running"), None)
+    return {"cid": j["cid"], "xid": j["xid"]} if j else {}
+
+
+# ---------------- clips ----------------
+
+@app.patch("/api/campaigns/{cid}/content/{xid}/clips/{filename}")
+def patch_clip(cid: str, xid: str, filename: str, body: dict = Body(...)):
     try:
-        return store.update_clip(cid, filename, body)
+        return store.update_clip(cid, xid, filename, body)
     except KeyError:
         raise HTTPException(404)
 
