@@ -75,7 +75,9 @@ async function open(id) {
 const clipCard = id => x => `
   <div class="clip ${x.status}" data-file="${esc(x.file)}">
     <video src="/media/${id}/${encodeURIComponent(x.file)}?v=${Math.round(x.start * 100)}-${Math.round(x.end * 100)}" controls preload="metadata"></video>
-    <b>${esc(x.title)}</b><p>${esc(x.caption)}</p>
+    <b>${esc(x.title)}</b>
+    <div class="stats">${tc(x.start)}–${tc(x.end)} in source · ${Math.round(x.end - x.start)}s${x.score ? ` · score ${x.score}` : ""} · #${x.file.match(/_(\d+)\.mp4$/)?.[1] ?? "?"}</div>
+    <p>${esc(x.caption)}</p>
     <div class="row">
       <select class="st">${["new","approved","rejected","posted"].map(s => `<option ${s===x.status?"selected":""}>${s}</option>`).join("")}</select>
       <input class="pay" type="number" step="0.01" placeholder="$ paid" value="${x.payout || ""}" style="width:80px">
@@ -147,6 +149,7 @@ function bind(c) {
   });
 }
 
+const tc = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 const ROLES = ["source", "logo", "music", "image", "brief", "ignore"];
 const ICON = { youtube: "▶️", video: "🎞", image: "🖼", audio: "🎵", doc: "📄", other: "❔" };
 const fmt = n => n > 1e9 ? (n / 1e9).toFixed(1) + " GB" : n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.ceil(n / 1e3) + " KB";
