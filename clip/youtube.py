@@ -87,6 +87,19 @@ def _parse_json3(data: dict) -> list[dict]:
     return out
 
 
+_JUNK = re.compile(r"^(>+|-+|\[[^\]]*\]|\([^)]*\)|♪+)$")  # ">>" speaker changes, [Music], (laughs)
+
+
+def _clean(segs: list[dict]) -> list[dict]:
+    out = []
+    for sg in segs:
+        ws = [w for w in sg["words"] if not _JUNK.match(w["word"])]
+        if ws:
+            out.append({"start": ws[0]["start"], "end": ws[-1]["end"],
+                        "text": " ".join(w["word"] for w in ws), "words": ws})
+    return out
+
+
 def _segments(words: list[dict]) -> list[dict]:
     """Group words into phrase-sized segments with word timings (same shape as Whisper's)."""
     segs, cur = [], []
@@ -127,7 +140,7 @@ def transcript(url: str, vid: str, work: Path, progress=None) -> list[dict] | No
     cache = work / f"{vid}.transcript.json"
     if cache.exists():
         say("Using cached transcript.")
-        return json.loads(cache.read_text())
+        return _clean(json.loads(cache.read_text()))
     # (auto captions have per-word timing so come first; manual captions are the fallback)
     for label, auto, lang in (("auto captions", True, "en-orig"), ("auto captions", True, "en"),
                               ("manual captions", False, "en")):
@@ -148,7 +161,7 @@ def transcript(url: str, vid: str, work: Path, progress=None) -> list[dict] | No
             break
         files = sorted(work.glob(f"{vid}.cap.*.json3"))  # a file may exist even if yt-dlp raised
         if files:
-            segs = _segments(_parse_json3(json.loads(files[0].read_text())))
+            segs = _clean(_segments(_parse_json3(json.loads(files[0].read_text()))))
             if segs:
                 say(f"Got {label} ({lang}): {len(segs)} phrases, {int(segs[-1]['end'] // 60)} min of speech.")
                 cache.write_text(json.dumps(segs))

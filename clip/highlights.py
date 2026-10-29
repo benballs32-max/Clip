@@ -135,6 +135,35 @@ REFINE_TOOL = {
 }
 
 
+_END = ('.', '?', '!', '…')
+
+
+def _ends(w: dict) -> bool:
+    return w["word"].rstrip('"\'”)»').endswith(_END)
+
+
+def _cut(segments, a: int, b: int, max_s: float):
+    """Word-level cut for lines a..b: finish the last sentence, drop a leading fragment of the previous
+    sentence and a trailing fragment of the next one. Returns (start, end) seconds or None."""
+    def words(x, y):
+        return [w for sg in segments[x:y + 1] for w in sg["words"]]
+    ws = words(a, b)
+    while (ws and not any(_ends(w) for w in ws[-8:]) and b + 1 < len(segments) and b - a < 40
+           and segments[b + 1]["end"] - segments[a]["start"] <= max_s):
+        b += 1
+        ws = words(a, b)
+    for i, w in enumerate(ws[:8]):  # leading fragment: lowercase continuation or a 1-3 word interjection
+        if _ends(w):
+            if i + 1 < len(ws) and (ws[0]["word"][:1].islower() or i < 3):
+                ws = ws[i + 1:]
+            break
+    for j in range(len(ws) - 1, max(len(ws) - 10, -1), -1):  # trailing fragment of the next sentence
+        if _ends(ws[j]):
+            ws = ws[:j + 1]
+            break
+    return (max(0.0, ws[0]["start"] - 0.1), ws[-1]["end"] + 0.4) if ws else None
+
+
 def _refine(client, usage, segments, cands, campaign, count, min_s, max_s):
     """Second pass (stronger model): choose exact start/end lines so each clip opens on its hook and
     ends only once the point has landed, on a complete sentence."""
@@ -167,12 +196,10 @@ def _refine(client, usage, segments, cands, campaign, count, min_s, max_s):
         a, b = r.get("start_line"), r.get("end_line")
         if not (isinstance(a, int) and isinstance(b, int) and 0 <= a <= b < len(segments)):
             continue
-        while (segments[b]["text"].rstrip()[-1:] not in '.?!…"\'”)' and b + 1 < len(segments)
-               and b - a < 40 and segments[b + 1]["end"] - segments[a]["start"] <= max_s):
-            b += 1  # safety net: don't stop mid-sentence if there's room to finish it
-        if not segments[a]["words"] or not segments[b]["words"]:
+        cut = _cut(segments, a, b, max_s)
+        if not cut:
             continue
-        s, e = max(0.0, segments[a]["words"][0]["start"] - 0.1), segments[b]["words"][-1]["end"] + 0.4
+        s, e = cut
         if not (min_s * 0.8 <= e - s <= max_s + 1):
             continue
         out.append({**r, "start": round(s, 2), "end": round(e, 2)})
