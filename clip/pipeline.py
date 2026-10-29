@@ -2,10 +2,19 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path
 from typing import Callable
 
 from . import assets, highlights, render, scenes, transcribe, youtube
+
+def _mins(sec: float) -> str:
+    return f"{int(sec // 60)} min" if sec >= 120 else f"{int(sec)} s"
+
+
+def _print(msg, pct=None):
+    print(msg)
+
 
 SPEECH_WPM = 25  # below this many words/minute a video is treated as visual footage
 
@@ -21,7 +30,7 @@ def _pretty(rel: str) -> str:
 
 
 def process_source(src: Path, rel: str, out_dir: Path, campaign: dict,
-                   progress: Callable[[str], None] = print,
+                   progress: Callable = _print,
                    logo: Path | None = None, music: Path | None = None) -> list[dict]:
     meta = assets.probe(src)
     duration = float(meta.get("format", {}).get("duration") or 0)
@@ -30,8 +39,8 @@ def process_source(src: Path, rel: str, out_dir: Path, campaign: dict,
 
     segments = []
     if src_audio:
-        progress(f"Transcribing {rel}…")
-        segments = transcribe.transcribe(src)
+        progress(f"{rel}: {_mins(duration)} video, transcribing speech…")
+        segments = transcribe.transcribe(src, progress)
     words = [w for s in segments for w in s["words"]]
     wpm = len(words) / (duration / 60) if duration else 0
     visual = wpm < SPEECH_WPM
@@ -43,14 +52,16 @@ def process_source(src: Path, rel: str, out_dir: Path, campaign: dict,
                  for a, b in scenes.windows(duration, cuts, min_s, max_s, campaign.get("clips_per_video", 8))]
         words = []  # nothing to caption
     else:
-        progress("Choosing highlights…")
+        progress(f"Asking Claude to pick the best {campaign.get('clips_per_video', 8)} moments…")
         picks = highlights.pick(segments, campaign, campaign.get("clips_per_video", 8))
+        progress(f"Claude chose {len(picks)} moments.")
 
     base = re.sub(r"[^\w]+", "_", str(Path(rel).with_suffix(""))).strip("_")
     results = []
     for i, p in enumerate(picks, 1):
         name = f"{base}_{i:02d}"
-        progress(f"Rendering clip {i}/{len(picks)}…")
+        progress(f"Rendering clip {i}/{len(picks)}…", round((i - 1) / len(picks) * 100))
+        t0 = time.time()
         out = out_dir / f"{name}.mp4"
         render.render_clip(
             src, out, p["start"], p["end"], words, mode=campaign.get("frame_mode", "blur"),
@@ -58,6 +69,7 @@ def process_source(src: Path, rel: str, out_dir: Path, campaign: dict,
             logo_scale=campaign.get("logo_scale", 0.18), music=music,
             music_volume=campaign.get("music_volume", 0.12) if not visual else max(campaign.get("music_volume", 0.12), 0.6),
             src_has_audio=src_audio)
+        progress(f"Clip {i} done in {time.time() - t0:.0f}s: {p['title']}")
         text = caption_text(p, campaign)
         out.with_suffix(".txt").write_text(f"{p['title']}\n\n{text}\n")
         results.append({"file": out.name, "source": rel, "title": p["title"], "caption": text,
@@ -67,29 +79,32 @@ def process_source(src: Path, rel: str, out_dir: Path, campaign: dict,
 
 
 def process_youtube(url: str, vid: str, title: str, work: Path, out_dir: Path, campaign: dict,
-                    progress: Callable[[str], None] = print,
+                    progress: Callable = _print,
                     logo: Path | None = None, music: Path | None = None) -> list[dict]:
     """Transcript first (captions, else audio+Whisper), then download only the chosen moments."""
-    progress(f"{title}: fetching captions…")
-    segments = youtube.transcript(url, vid, work)
+    progress(f"{title}: fetching YouTube captions…")
+    segments = youtube.transcript(url, vid, work, progress)
     if not segments:
-        progress("No captions. Downloading audio and transcribing (slow on long videos)…")
-        audio = youtube.download_audio(url, vid, work)
-        segments = transcribe.transcribe(audio)
+        progress("No captions found. Downloading the audio to transcribe it (slow on long videos)…")
+        audio = youtube.download_audio(url, vid, work, progress)
+        segments = transcribe.transcribe(audio, progress)
     if not segments:
         raise RuntimeError(f"No speech found in {title}.")
-    progress("Choosing highlights…")
+    progress(f"Asking Claude to pick the best {campaign.get('clips_per_video', 8)} moments…")
     picks = highlights.pick(segments, campaign, campaign.get("clips_per_video", 8))
+    progress(f"Claude chose {len(picks)} moments.")
     words = [w for s in segments for w in s["words"]]
     results = []
     for i, p in enumerate(picks, 1):
         name = f"yt_{vid}_{i:02d}"
         sec_start = max(0.0, p["start"] - 1.0)
-        progress(f"Downloading moment {i}/{len(picks)} ({int(p['start'])}s–{int(p['end'])}s)…")
+        t0 = time.time()
+        progress(f"Downloading moment {i}/{len(picks)} ({int(p['start'])}s–{int(p['end'])}s)…",
+                 round((i - 1) / len(picks) * 100))
         section = youtube.download_section(url, sec_start, p["end"] + 1.0, work / f"{name}.src.mp4")
         shifted = [{**w, "start": w["start"] - sec_start, "end": w["end"] - sec_start} for w in words
                    if sec_start - 0.1 <= w["start"] <= p["end"] + 1.0]
-        progress(f"Rendering clip {i}/{len(picks)}…")
+        progress(f"Downloaded in {time.time() - t0:.0f}s. Rendering clip {i}/{len(picks)}…")
         out = out_dir / f"{name}.mp4"
         render.render_clip(section, out, p["start"] - sec_start, p["end"] - sec_start, shifted,
                            mode=campaign.get("frame_mode", "blur"), logo=logo,
@@ -97,6 +112,7 @@ def process_youtube(url: str, vid: str, title: str, work: Path, out_dir: Path, c
                            logo_scale=campaign.get("logo_scale", 0.18), music=music,
                            music_volume=campaign.get("music_volume", 0.12))
         section.unlink(missing_ok=True)
+        progress(f"Clip {i} done in {time.time() - t0:.0f}s: {p['title']}")
         text = caption_text(p, campaign)
         out.with_suffix(".txt").write_text(f"{p['title']}\n\n{text}\n")
         results.append({"file": out.name, "source": f"{title} ({url})", "title": p["title"],

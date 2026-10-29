@@ -8,6 +8,10 @@ nav a{padding:9px 11px;border-radius:8px;color:var(--text);cursor:pointer;displa
 nav a small{display:block;color:var(--mute)}
 nav a:hover{background:#20242e}nav a.on{background:#2a2f3c;outline:1px solid var(--accent)}
 main{flex:1;overflow:auto;padding:24px 32px}
+.cols{display:flex;gap:28px;align-items:flex-start}
+.left{flex:1;min-width:0}
+.activity{width:360px;flex:none;position:sticky;top:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;max-height:calc(100vh - 48px);display:flex;flex-direction:column;gap:8px}
+@media(max-width:1250px){.cols{flex-direction:column}.activity{width:100%;position:static}}
 .empty{color:var(--mute)}
 h2{margin:0 0 4px}h3{margin:28px 0 10px}
 .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px 14px;max-width:760px}
@@ -24,7 +28,7 @@ button.danger{color:var(--bad)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:10px}
 ul.src{list-style:none;padding:0;margin:10px 0;color:var(--mute)}
 ul.src .done{color:var(--ok)}
-pre.log{background:#0a0c10;border:1px solid var(--line);border-radius:8px;padding:10px;max-height:160px;overflow:auto;max-width:760px;color:var(--mute)}
+pre.log{background:#0a0c10;border:1px solid var(--line);border-radius:8px;padding:10px;margin:0;flex:1;min-height:200px;max-height:calc(100vh - 190px);overflow:auto;color:var(--mute);font:12px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word}
 .clips{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
 .clip{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px}
 .clip video{width:100%;aspect-ratio:9/16;background:#000;border-radius:6px}
@@ -35,3 +39,9 @@ table.assets{border-collapse:collapse;width:100%;max-width:860px}
 table.assets td{padding:5px 8px;border-bottom:1px solid var(--line)}
 table.assets select{padding:3px}
 table.assets button{padding:2px 8px}
+.pill{font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;margin-left:6px;background:#2a2f3c;color:var(--mute);vertical-align:middle}
+.pill:empty{display:none}.pill.running{background:#3a3000;color:var(--accent)}.pill.done{background:#12351f;color:var(--ok)}.pill.error{background:#3a1515;color:var(--bad)}
+.bar{height:8px;background:#0a0c10;border-radius:99px;overflow:hidden}
+.bar div{height:100%;background:var(--accent);border-radius:99px;transition:width .6s}
+.bar.indet div{animation:slide 1.4s ease-in-out infinite alternate}
+@keyframes slide{from{margin-left:0}to{margin-left:65%}}

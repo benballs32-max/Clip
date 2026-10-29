@@ -156,6 +156,12 @@ def add_youtube(cid: str, body: dict = Body(...)):
 
 def _run_job(job_id: str, cid: str) -> None:
     job = jobs[job_id]
+
+    def log(msg: str, pct=None) -> None:
+        t = int(time.time() - job["started"])
+        job["log"].append(f"[{t // 60:02d}:{t % 60:02d}] {msg}")
+        job["percent"] = pct
+
     try:
         campaign = store.get(cid)
         pick = lambda role: next((_asset_file(cid, a["path"]) for a in campaign["assets"] if a["role"] == role
@@ -164,23 +170,24 @@ def _run_job(job_id: str, cid: str) -> None:
         todo = [a for a in campaign["assets"] if a["kind"] in ("video", "youtube") and a["role"] == "source"
                 and a["path"] not in campaign["sources_done"]]
         if not todo:
-            job["log"].append("No new source videos to process.")
-        log = lambda m: job["log"].append(m)
-        for a in todo:
+            log("No new source videos to process.")
+        for n, a in enumerate(todo, 1):
+            log(f"Source {n}/{len(todo)}: {a.get('title') or a['path']}")
             if a["kind"] == "youtube":
                 clips = process_youtube(a["url"], a["path"].split(":", 1)[1], a["title"],
                                         store.cdir(cid) / "_work", store.cdir(cid) / "clips",
                                         campaign, progress=log, logo=logo, music=music)
-                store.add_clips(cid, a["path"], clips)
-                continue
-            clips = process_source(_asset_file(cid, a["path"]), a["path"], store.cdir(cid) / "clips",
-                                   campaign, progress=lambda m: job["log"].append(m),
-                                   logo=logo, music=music)
+            else:
+                clips = process_source(_asset_file(cid, a["path"]), a["path"], store.cdir(cid) / "clips",
+                                       campaign, progress=log, logo=logo, music=music)
             store.add_clips(cid, a["path"], clips)
+            log(f"Finished: {len(clips)} clips.")
         job["state"] = "done"
+        log("All done.", 100)
     except Exception as e:  # surface any failure in the UI
         job["state"], job["error"] = "error", str(e)
-        job["log"].append(f"Error: {e}")
+        log(f"ERROR: {e}")
+    job["finished"] = time.time()
 
 
 @app.post("/api/campaigns/{cid}/generate")
@@ -189,16 +196,27 @@ def generate(cid: str):
     if any(j["cid"] == cid and j["state"] == "running" for j in jobs.values()):
         raise HTTPException(409, "Already running")
     job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {"cid": cid, "state": "running", "log": [], "started": time.time()}
+    jobs[job_id] = {"id": job_id, "cid": cid, "state": "running", "log": [], "percent": None,
+                    "started": time.time(), "finished": None}
     threading.Thread(target=_run_job, args=(job_id, cid), daemon=True).start()
     return {"job": job_id}
+
+
+def _view(job: dict) -> dict:
+    return {**job, "elapsed": (job["finished"] or time.time()) - job["started"]}
 
 
 @app.get("/api/jobs/{job_id}")
 def job_status(job_id: str):
     if job_id not in jobs:
         raise HTTPException(404)
-    return jobs[job_id]
+    return _view(jobs[job_id])
+
+
+@app.get("/api/campaigns/{cid}/job")
+def latest_job(cid: str):
+    mine = [j for j in jobs.values() if j["cid"] == cid]
+    return _view(max(mine, key=lambda j: j["started"])) if mine else {}
 
 
 @app.patch("/api/campaigns/{cid}/clips/{filename}")

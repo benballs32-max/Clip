@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -65,7 +66,7 @@ def _parse_json3(data: dict) -> list[dict]:
             out.append(w)
             last = w["start"]
     for a, b in zip(out, out[1:]):
-        a["end"] = min(b["start"], a["start"] + 1.0) or a["start"] + 0.3
+        a["end"] = max(min(b["start"], a["start"] + 1.0), a["start"] + 0.08)
     if out:
         out[-1]["end"] = out[-1]["start"] + 0.4
     return out
@@ -86,35 +87,64 @@ def _segments(words: list[dict]) -> list[dict]:
              "words": s} for s in segs]
 
 
-def transcript(url: str, vid: str, work: Path) -> list[dict] | None:
-    """Transcript from YouTube's own captions, or None if there are none."""
+def _hook(progress, label):
+    """yt-dlp progress hook that reports every 10%."""
+    last = [-10]
+
+    def hook(d):
+        total = d.get("total_bytes") or d.get("total_bytes_estimate")
+        if d.get("status") != "downloading" or not total:
+            return
+        pct = int(d["downloaded_bytes"] * 100 / total)
+        if pct >= last[0] + 10:
+            last[0] = pct - pct % 10
+            progress(f"{label} {pct}%", pct)
+    return hook
+
+
+def transcript(url: str, vid: str, work: Path, progress=None) -> list[dict] | None:
+    """Transcript from YouTube's own captions, or None if there are none.
+
+    One track per request: asking for two at once makes YouTube rate-limit (HTTP 429) the
+    second, and a single error used to discard the track that had already arrived."""
+    say = progress or (lambda *a: None)
     work.mkdir(parents=True, exist_ok=True)
     cache = work / f"{vid}.transcript.json"
     if cache.exists():
+        say("Using cached transcript.")
         return json.loads(cache.read_text())
-    for auto in (True, False):  # auto captions have per-word timing, so try them first
-        for old in work.glob(f"{vid}.cap.*"):
-            old.unlink()
-        try:
-            with yt_dlp.YoutubeDL(_opts(
-                    skip_download=True, writeautomaticsub=auto, writesubtitles=not auto,
-                    subtitleslangs=["en-orig", "en"] if auto else ["en"], subtitlesformat="json3",
-                    outtmpl=str(work / f"{vid}.cap.%(ext)s"))) as ydl:
-                ydl.download([url])
-        except Exception:
-            continue
-        files = sorted(work.glob(f"{vid}.cap.*.json3"))
+    # (auto captions have per-word timing so come first; manual captions are the fallback)
+    for label, auto, lang in (("auto captions", True, "en-orig"), ("auto captions", True, "en"),
+                              ("manual captions", False, "en")):
+        for attempt in range(2):
+            for old in work.glob(f"{vid}.cap.*"):
+                old.unlink()
+            try:
+                with yt_dlp.YoutubeDL(_opts(
+                        skip_download=True, writeautomaticsub=auto, writesubtitles=not auto,
+                        subtitleslangs=[lang], subtitlesformat="json3",
+                        outtmpl=str(work / f"{vid}.cap.%(ext)s"))) as ydl:
+                    ydl.download([url])
+            except Exception as e:
+                if "429" in str(e) and attempt == 0:
+                    say("YouTube rate-limited the caption request, retrying…")
+                    time.sleep(5)
+                    continue
+            break
+        files = sorted(work.glob(f"{vid}.cap.*.json3"))  # a file may exist even if yt-dlp raised
         if files:
             segs = _segments(_parse_json3(json.loads(files[0].read_text())))
             if segs:
+                say(f"Got {label} ({lang}): {len(segs)} phrases, {int(segs[-1]['end'] // 60)} min of speech.")
                 cache.write_text(json.dumps(segs))
                 return segs
     return None
 
 
-def download_audio(url: str, vid: str, work: Path) -> Path:
+def download_audio(url: str, vid: str, work: Path, progress=None) -> Path:
     work.mkdir(parents=True, exist_ok=True)
-    with yt_dlp.YoutubeDL(_opts(format="bestaudio[ext=m4a]/bestaudio/best",
+    hooks = [_hook(progress, "Downloading audio")] if progress else []
+    with yt_dlp.YoutubeDL(_opts(format="bestaudio[ext=m4a]/bestaudio/best", progress_hooks=hooks,
                                 outtmpl=str(work / f"{vid}.audio.%(ext)s"))) as ydl:
         ydl.download([url])
     return next(work.glob(f"{vid}.audio.*"))

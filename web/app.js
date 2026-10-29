@@ -31,7 +31,7 @@ async function open(id) {
   const briefs = c.assets.filter(a => a.role === "brief");
   const total = clips.reduce((a, x) => a + (+x.payout || 0), 0);
   const count = s => clips.filter(x => x.status === s).length;
-  $("#main").innerHTML = `
+  $("#main").innerHTML = `<div class="cols"><div class="left">
     <h2>${esc(c.name)}</h2>
     <div class="stats"><b>${clips.length}</b> clips · <b>${count("approved")}</b> approved · <b>${count("posted")}</b> posted · <b>$${total.toFixed(2)}</b> earned</div>
     <h3>Campaign brief</h3>
@@ -61,10 +61,15 @@ async function open(id) {
     <div class="stats" id="status"></div>
     ${assetTable(c)}
     <div class="row"><button class="primary" id="gen">Generate clips</button></div>
-    <pre class="log" id="log" hidden></pre>
     <h3>Clips</h3>
-    <div class="clips">${clips.map(clipCard(id)).join("") || '<p class="empty">Nothing generated yet.</p>'}</div>`;
+    <div class="clips">${clips.map(clipCard(id)).join("") || '<p class="empty">Nothing generated yet.</p>'}</div>
+    </div>
+    <aside class="activity"><h3 style="margin-top:0">Activity <span id="pill" class="pill"></span></h3>
+      <div class="bar" id="barwrap" hidden><div id="bar"></div></div>
+      <div class="stats" id="elapsed"></div>
+      <pre id="log" class="log">Nothing running. Press Generate to start.</pre></aside></div>`;
   bind(c);
+  attachJob(c.id, false);
 }
 
 const clipCard = id => x => `
@@ -210,19 +215,38 @@ async function analyze(id) {
   } catch (e) { msg.textContent = e.message; }
 }
 
+let jobLoop = 0;
+async function attachJob(id, refreshOnDone) {
+  const loop = ++jobLoop;  // only the newest loop may update the page
+  const btn = $("#gen");
+  let was = false;
+  for (;;) {
+    let j;
+    try { j = await api(`/api/campaigns/${id}/job`); } catch { return; }
+    if (loop !== jobLoop || current !== id || !$("#log")) return;
+    if (!j.id) return;
+    const running = j.state === "running";
+    const log = $("#log"), stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+    log.textContent = j.log.join("\n") || "Starting…";
+    if (stick) log.scrollTop = log.scrollHeight;
+    const pill = $("#pill"); pill.textContent = j.state; pill.className = `pill ${j.state}`;
+    const m = Math.floor(j.elapsed / 60), sec = Math.floor(j.elapsed % 60);
+    $("#elapsed").textContent = `${running ? "Running for" : "Took"} ${m}m ${sec}s`;
+    $("#barwrap").hidden = !running;
+    $("#barwrap").classList.toggle("indet", j.percent == null);
+    $("#bar").style.width = j.percent == null ? "35%" : `${j.percent}%`;
+    if (btn) btn.disabled = running;
+    if (!running) { if (refreshOnDone || was) await open(id); return; }
+    was = true;
+    await new Promise(r => setTimeout(r, 1500));
+  }
+}
+
 async function generate(id) {
-  const log = $("#log"), btn = $("#gen");
-  btn.disabled = true; log.hidden = false; log.textContent = "Starting…";
   try {
-    const { job } = await api(`/api/campaigns/${id}/generate`, { method: "POST" });
-    for (;;) {
-      await new Promise(r => setTimeout(r, 1500));
-      const j = await api(`/api/jobs/${job}`);
-      log.textContent = j.log.join("\n"); log.scrollTop = log.scrollHeight;
-      if (j.state !== "running") break;
-    }
-    await open(id);
-  } catch (e) { log.textContent = e.message; btn.disabled = false; }
+    await api(`/api/campaigns/${id}/generate`, { method: "POST" });
+    attachJob(id, true);
+  } catch (e) { $("#log").textContent = e.message; }
 }
 
 loadList();
