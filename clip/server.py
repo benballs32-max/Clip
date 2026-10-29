@@ -154,7 +154,7 @@ def add_youtube(cid: str, body: dict = Body(...)):
     return asset
 
 
-def _run_job(job_id: str, cid: str) -> None:
+def _run_job(job_id: str, cid: str, redo: bool = False) -> None:
     job = jobs[job_id]
 
     def log(msg: str, pct=None) -> None:
@@ -168,7 +168,12 @@ def _run_job(job_id: str, cid: str) -> None:
                                   and a["kind"] == ("audio" if role == "music" else "image")), None)
         logo, music = pick("logo"), pick("music")
         todo = [a for a in campaign["assets"] if a["kind"] in ("video", "youtube") and a["role"] == "source"
-                and a["path"] not in campaign["sources_done"]]
+                and (redo or a["path"] not in campaign["sources_done"])]
+
+        def made_from(a):  # clips already produced from this source (older clips lack src_key)
+            vid = a["path"].split(":", 1)[1] if a["kind"] == "youtube" else None
+            return [c for c in campaign["clips"] if c.get("src_key") == a["path"] or c["source"] == a["path"]
+                    or (vid and vid in c["source"])]
         if not todo:
             log("No new source videos to process.")
         for n, a in enumerate(todo, 1):
@@ -176,10 +181,10 @@ def _run_job(job_id: str, cid: str) -> None:
             if a["kind"] == "youtube":
                 clips = process_youtube(a["url"], a["path"].split(":", 1)[1], a["title"],
                                         store.cdir(cid) / "_work", store.cdir(cid) / "clips",
-                                        campaign, progress=log, logo=logo, music=music)
+                                        campaign, progress=log, logo=logo, music=music, existing=made_from(a))
             else:
                 clips = process_source(_asset_file(cid, a["path"]), a["path"], store.cdir(cid) / "clips",
-                                       campaign, progress=log, logo=logo, music=music)
+                                       campaign, progress=log, logo=logo, music=music, existing=made_from(a))
             store.add_clips(cid, a["path"], clips)
             log(f"Finished: {len(clips)} clips.")
         job["state"] = "done"
@@ -191,14 +196,14 @@ def _run_job(job_id: str, cid: str) -> None:
 
 
 @app.post("/api/campaigns/{cid}/generate")
-def generate(cid: str):
+def generate(cid: str, redo: bool = False):
     _campaign(cid)
     if any(j["cid"] == cid and j["state"] == "running" for j in jobs.values()):
         raise HTTPException(409, "Already running")
     job_id = uuid.uuid4().hex[:8]
     jobs[job_id] = {"id": job_id, "cid": cid, "state": "running", "log": [], "percent": None,
                     "started": time.time(), "finished": None}
-    threading.Thread(target=_run_job, args=(job_id, cid), daemon=True).start()
+    threading.Thread(target=_run_job, args=(job_id, cid, redo), daemon=True).start()
     return {"job": job_id}
 
 

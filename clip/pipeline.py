@@ -19,6 +19,22 @@ def _print(msg, pct=None):
 SPEECH_WPM = 25  # below this many words/minute a video is treated as visual footage
 
 
+def _overlaps(p: dict, existing: list[dict]) -> bool:
+    """True if a pick covers (mostly) the same moment as a clip we already made."""
+    for c in existing:
+        inter = min(p["end"], c["end"]) - max(p["start"], c["start"])
+        if inter > 0.3 * min(p["end"] - p["start"], c["end"] - c["start"]):
+            return True
+    return False
+
+
+def _free_name(out_dir: Path, base: str, start: int) -> tuple[str, int]:
+    i = start
+    while (out_dir / f"{base}_{i:02d}.mp4").exists():
+        i += 1
+    return f"{base}_{i:02d}", i + 1
+
+
 def caption_text(clip: dict, campaign: dict) -> str:
     disclosure = campaign.get("disclosure", "#ad")
     tags = [t for t in campaign.get("hashtags", []) if t.lower() != disclosure.lower()]
@@ -31,7 +47,8 @@ def _pretty(rel: str) -> str:
 
 def process_source(src: Path, rel: str, out_dir: Path, campaign: dict,
                    progress: Callable = _print,
-                   logo: Path | None = None, music: Path | None = None) -> list[dict]:
+                   logo: Path | None = None, music: Path | None = None,
+                   existing: list[dict] = ()) -> list[dict]:
     meta = assets.probe(src)
     duration = float(meta.get("format", {}).get("duration") or 0)
     src_audio = any(s.get("codec_type") == "audio" for s in meta.get("streams", []))
@@ -52,14 +69,14 @@ def process_source(src: Path, rel: str, out_dir: Path, campaign: dict,
                  for a, b in scenes.windows(duration, cuts, min_s, max_s, campaign.get("clips_per_video", 8))]
         words = []  # nothing to caption
     else:
-        progress(f"Asking Claude to pick the best {campaign.get('clips_per_video', 8)} moments…")
-        picks = highlights.pick(segments, campaign, campaign.get("clips_per_video", 8))
-        progress(f"Claude chose {len(picks)} moments.")
+        picks = highlights.pick(segments, campaign, campaign.get("clips_per_video", 8), progress)
 
+    picks = [p for p in picks if not _overlaps(p, existing)]
+    progress(f"{len(picks)} new moments to render.")
     base = re.sub(r"[^\w]+", "_", str(Path(rel).with_suffix(""))).strip("_")
-    results = []
+    results, nxt = [], 1
     for i, p in enumerate(picks, 1):
-        name = f"{base}_{i:02d}"
+        name, nxt = _free_name(out_dir, base, nxt)
         progress(f"Rendering clip {i}/{len(picks)}…", round((i - 1) / len(picks) * 100))
         t0 = time.time()
         out = out_dir / f"{name}.mp4"
@@ -74,13 +91,15 @@ def process_source(src: Path, rel: str, out_dir: Path, campaign: dict,
         out.with_suffix(".txt").write_text(f"{p['title']}\n\n{text}\n")
         results.append({"file": out.name, "source": rel, "title": p["title"], "caption": text,
                         "start": p["start"], "end": p["end"], "reason": p.get("reason", ""),
+                        "score": p.get("score"), "src_key": rel,
                         "status": "new", "notes": "", "payout": 0})
     return results
 
 
 def process_youtube(url: str, vid: str, title: str, work: Path, out_dir: Path, campaign: dict,
                     progress: Callable = _print,
-                    logo: Path | None = None, music: Path | None = None) -> list[dict]:
+                    logo: Path | None = None, music: Path | None = None,
+                    existing: list[dict] = ()) -> list[dict]:
     """Transcript first (captions, else audio+Whisper), then download only the chosen moments."""
     progress(f"{title}: fetching YouTube captions…")
     segments = youtube.transcript(url, vid, work, progress)
@@ -90,13 +109,13 @@ def process_youtube(url: str, vid: str, title: str, work: Path, out_dir: Path, c
         segments = transcribe.transcribe(audio, progress)
     if not segments:
         raise RuntimeError(f"No speech found in {title}.")
-    progress(f"Asking Claude to pick the best {campaign.get('clips_per_video', 8)} moments…")
-    picks = highlights.pick(segments, campaign, campaign.get("clips_per_video", 8))
-    progress(f"Claude chose {len(picks)} moments.")
+    picks = highlights.pick(segments, campaign, campaign.get("clips_per_video", 8), progress)
+    picks = [p for p in picks if not _overlaps(p, existing)]
+    progress(f"{len(picks)} new moments to render.")
     words = [w for s in segments for w in s["words"]]
-    results, spec = [], None
+    results, spec, nxt = [], None, 1
     for i, p in enumerate(picks, 1):
-        name = f"yt_{vid}_{i:02d}"
+        name, nxt = _free_name(out_dir, f"yt_{vid}", nxt)
         out = out_dir / f"{name}.mp4"
         t0 = time.time()
         kw = dict(mode=campaign.get("frame_mode", "blur"), logo=logo,

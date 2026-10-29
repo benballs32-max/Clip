@@ -48,7 +48,7 @@ async function open(id) {
       <label>Disclosure tag<input name="disclosure" value="${esc(c.disclosure)}"></label>
       <label>Min seconds<input name="min_seconds" type="number" value="${c.min_seconds}"></label>
       <label>Max seconds<input name="max_seconds" type="number" value="${c.max_seconds}"></label>
-      <label>Clips per video<input name="clips_per_video" type="number" value="${c.clips_per_video}"></label>
+      <label>Max clips per video<input name="clips_per_video" type="number" value="${c.clips_per_video}"></label>
       <label>Framing<select name="frame_mode"><option value="blur" ${c.frame_mode==="blur"?"selected":""}>Fit + blurred background</option><option value="fill" ${c.frame_mode==="fill"?"selected":""}>Fill (center crop)</option></select></label>
       <label>Logo position<select name="logo_position">${[["tr","Top right"],["tl","Top left"],["br","Bottom right"],["bl","Bottom left"],["off","Off"]].map(([v,t]) => `<option value="${v}" ${v===c.logo_position?"selected":""}>${t}</option>`).join("")}</select></label>
       <label>Logo size (fraction of width)<input name="logo_scale" type="number" step="0.01" min="0.05" max="0.6" value="${c.logo_scale}"></label>
@@ -60,7 +60,7 @@ async function open(id) {
     <div class="row"><input id="yt" placeholder="…or paste a YouTube link (only videos the campaign lets you use)" style="flex:1;max-width:560px"><button id="ytBtn">Add video</button></div>
     <div class="stats" id="status"></div>
     ${assetTable(c)}
-    <div class="row"><button class="primary" id="gen">Generate clips</button></div>
+    <div class="row"><button class="primary" id="gen">Generate clips</button>${c.sources_done.length ? '<button id="more" title="Re-scan videos already processed and add new clips that don\'t overlap the ones you have">Find more clips</button>' : ""}</div>
     <h3>Clips</h3>
     <div class="clips">${clips.map(clipCard(id)).join("") || '<p class="empty">Nothing generated yet.</p>'}</div>
     </div>
@@ -137,6 +137,7 @@ function bind(c) {
     open(c.id);
   });
   $("#gen").onclick = () => generate(c.id);
+  if ($("#more")) $("#more").onclick = () => generate(c.id, true);
   document.querySelectorAll(".clip").forEach(el => {
     const f = encodeURIComponent(el.dataset.file), patch = body =>
       api(`/api/campaigns/${c.id}/clips/${f}`, { method: "PATCH", body });
@@ -242,9 +243,9 @@ async function attachJob(id, refreshOnDone) {
   }
 }
 
-async function generate(id) {
+async function generate(id, redo = false) {
   try {
-    await api(`/api/campaigns/${id}/generate`, { method: "POST" });
+    await api(`/api/campaigns/${id}/generate${redo ? "?redo=true" : ""}`, { method: "POST" });
     attachJob(id, true);
   } catch (e) { $("#log").textContent = e.message; }
 }
