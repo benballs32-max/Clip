@@ -167,15 +167,18 @@ def _cut(segments, a: int, b: int, max_s: float):
                 break
         if i0 > 0 and not _ends(flat[i0 - 1]):
             back = i0
-            while back > 0 and i0 - back < 25 and not _ends(flat[back - 1]):
+            while back > 0 and i0 - back < 40 and not _ends(flat[back - 1]):
                 back -= 1
             if (back == 0 or _ends(flat[back - 1])) and flat[i1]["end"] - flat[back]["start"] <= max_s:
                 i0 = back  # pull the start back to the beginning of the sentence
             else:
-                for k in range(i0, min(i0 + 12, i1)):  # or skip forward to the next sentence
+                for k in range(i0, min(i0 + 20, i1)):  # or skip forward to the next sentence
                     if _ends(flat[k]):
                         i0 = k + 1
                         break
+                else:
+                    if flat[i0]["word"][:1].islower():  # still mid-sentence: not a usable opening
+                        return None
         if i0 > i1:
             return None
         ws = flat[i0:i1 + 1]
