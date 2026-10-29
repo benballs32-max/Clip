@@ -143,32 +143,46 @@ def _ends(w: dict) -> bool:
 
 
 def _cut(segments, a: int, b: int, max_s: float):
-    """Word-level cut for lines a..b: finish the last sentence, drop a leading fragment of the previous
-    sentence and a trailing fragment of the next one. Returns (start, end) seconds or None."""
-    def words(x, y):
-        return [w for sg in segments[x:y + 1] for w in sg["words"]]
-    ws = words(a, b)
-    while (ws and not any(_ends(w) for w in ws[-8:]) and b + 1 < len(segments) and b - a < 40
-           and segments[b + 1]["end"] - segments[a]["start"] <= max_s):
-        b += 1
-        ws = words(a, b)
-    for i, w in enumerate(ws[:8]):  # leading fragment: lowercase continuation or a 1-3 word interjection
-        if _ends(w):
-            if i + 1 < len(ws) and (ws[0]["word"][:1].islower() or i < 3):
-                ws = ws[i + 1:]
-            break
-    for j in range(len(ws) - 1, max(len(ws) - 10, -1), -1):  # trailing fragment of the next sentence
-        if _ends(ws[j]):
-            ws = ws[:j + 1]
-            break
+    """Word-level cut for lines a..b so the clip opens at the start of a sentence and ends where one
+    finishes. Returns (start, end) seconds, or None. Transcripts without punctuation are left as is."""
+    flat = [w for sg in segments for w in sg["words"]]
+    idx = {id(w): i for i, w in enumerate(flat)}
+    ws = [w for sg in segments[a:b + 1] for w in sg["words"]]
     if not ws:
         return None
-    # pad by up to 0.4s at the end / 0.1s at the start, but never into a neighbouring word
-    flat = [w for sg in segments for w in sg["words"]]
-    i0 = next(i for i, w in enumerate(flat) if w is ws[0])
-    i1 = next(i for i, w in enumerate(flat) if w is ws[-1])
+    if sum(map(_ends, flat)) / max(len(flat), 1) > 0.01:  # only trust sentence logic if there is punctuation
+        i0, i1 = idx[id(ws[0])], idx[id(ws[-1])]
+        # end: finish the sentence, then drop a trailing fragment of the next one
+        while i1 + 1 < len(flat) and not any(_ends(w) for w in flat[max(i0, i1 - 7):i1 + 1]) \
+                and flat[i1 + 1]["end"] - flat[i0]["start"] <= max_s:
+            i1 += 1
+        for j in range(i1, max(i1 - 10, i0 - 1), -1):
+            if _ends(flat[j]):
+                i1 = j
+                break
+        # start: drop a 1-3 word interjection ("Of course."), then make sure we open on a sentence start
+        for k in range(i0, min(i0 + 3, i1)):
+            if _ends(flat[k]):
+                i0 = k + 1
+                break
+        if i0 > 0 and not _ends(flat[i0 - 1]):
+            back = i0
+            while back > 0 and i0 - back < 25 and not _ends(flat[back - 1]):
+                back -= 1
+            if (back == 0 or _ends(flat[back - 1])) and flat[i1]["end"] - flat[back]["start"] <= max_s:
+                i0 = back  # pull the start back to the beginning of the sentence
+            else:
+                for k in range(i0, min(i0 + 12, i1)):  # or skip forward to the next sentence
+                    if _ends(flat[k]):
+                        i0 = k + 1
+                        break
+        if i0 > i1:
+            return None
+        ws = flat[i0:i1 + 1]
+    i0, i1 = idx[id(ws[0])], idx[id(ws[-1])]
     nxt = flat[i1 + 1]["start"] if i1 + 1 < len(flat) else ws[-1]["end"] + 1
     prv = flat[i0 - 1]["end"] if i0 > 0 else 0.0
+    # pad by up to 0.1s at the start / 0.4s at the end, but never into a neighbouring word
     return (max(0.0, ws[0]["start"] - min(0.1, max(0.0, ws[0]["start"] - prv - 0.03))),
             ws[-1]["end"] + min(0.4, max(0.05, nxt - ws[-1]["end"] - 0.06)))
 
