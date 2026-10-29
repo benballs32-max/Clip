@@ -14,6 +14,16 @@ from . import assets, briefs, config, store, youtube
 from .pipeline import process_source, process_youtube
 
 app = FastAPI(title="Clip")
+
+
+@app.middleware("http")
+async def no_stale_cache(request, call_next):
+    """Always revalidate pages, scripts and clips: replaced clips reuse their file names."""
+    resp = await call_next(request)
+    if not request.url.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
 jobs: dict[str, dict] = {}
 
 

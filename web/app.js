@@ -74,7 +74,7 @@ async function open(id) {
 
 const clipCard = id => x => `
   <div class="clip ${x.status}" data-file="${esc(x.file)}">
-    <video src="/media/${id}/${encodeURIComponent(x.file)}" controls preload="metadata"></video>
+    <video src="/media/${id}/${encodeURIComponent(x.file)}?v=${Math.round(x.start * 100)}-${Math.round(x.end * 100)}" controls preload="metadata"></video>
     <b>${esc(x.title)}</b><p>${esc(x.caption)}</p>
     <div class="row">
       <select class="st">${["new","approved","rejected","posted"].map(s => `<option ${s===x.status?"selected":""}>${s}</option>`).join("")}</select>
