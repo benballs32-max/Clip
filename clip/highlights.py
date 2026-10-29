@@ -161,7 +161,16 @@ def _cut(segments, a: int, b: int, max_s: float):
         if _ends(ws[j]):
             ws = ws[:j + 1]
             break
-    return (max(0.0, ws[0]["start"] - 0.1), ws[-1]["end"] + 0.4) if ws else None
+    if not ws:
+        return None
+    # pad by up to 0.4s at the end / 0.1s at the start, but never into a neighbouring word
+    flat = [w for sg in segments for w in sg["words"]]
+    i0 = next(i for i, w in enumerate(flat) if w is ws[0])
+    i1 = next(i for i, w in enumerate(flat) if w is ws[-1])
+    nxt = flat[i1 + 1]["start"] if i1 + 1 < len(flat) else ws[-1]["end"] + 1
+    prv = flat[i0 - 1]["end"] if i0 > 0 else 0.0
+    return (max(0.0, ws[0]["start"] - min(0.1, max(0.0, ws[0]["start"] - prv - 0.03))),
+            ws[-1]["end"] + min(0.4, max(0.05, nxt - ws[-1]["end"] - 0.06)))
 
 
 def _refine(client, usage, segments, cands, campaign, count, min_s, max_s):
