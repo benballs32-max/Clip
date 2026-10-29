@@ -68,7 +68,11 @@ def pick(segments: list[dict], campaign: dict, count: int = 8) -> list[dict]:
             f"Pick up to {count} non-overlapping moments, each {min_s}-{max_s} seconds long. "
             f"Each must start on a strong hook and make sense standalone. Prefer surprising, funny, "
             f"emotional or high-value moments. Never invent quotes. Write a short punchy title and "
-            f"a one-line caption (no hashtags).\n\nTranscript (seconds):\n{_fmt(segments)}"
+            f"a one-line caption (no hashtags). The caption must follow any caption rules in the "
+            f"brief above, including required @mentions, and must not be clickbait or misleading. "
+            f"Respect every content rule in the brief (topics, banned segments such as ad reads "
+            f"or sponsors, complete thoughts only). If fewer than {count} moments genuinely qualify, "
+            f"return fewer.\n\nTranscript (seconds):\n{_fmt(segments)}"
         )
         resp = client.messages.create(
             model=config.CLAUDE_MODEL, max_tokens=4000, tools=[TOOL],

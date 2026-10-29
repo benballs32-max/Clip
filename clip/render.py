@@ -45,7 +45,20 @@ LOGO_POS = {  # overlay x:y for a 1080x1920 frame, clear of the caption zone
 }
 
 
-def render_clip(src: Path, out: Path, start: float, end: float, words: list[dict],
+def _inputs(src, start: float, end: float):
+    """ffmpeg input args for a local file or a streamed YouTube spec.
+    Returns (args, number_of_inputs, audio_stream_ref)."""
+    seek = ["-ss", f"{start:.2f}", "-to", f"{end:.2f}"]
+    if isinstance(src, dict):  # {"video": url, "audio": url|None, "headers": str}
+        hdr = ["-headers", src["headers"]] if src.get("headers") else []
+        args = [*seek, *hdr, "-i", src["video"]]
+        if src.get("audio"):
+            return args + [*seek, *hdr, "-i", src["audio"]], 2, "1:a"
+        return args, 1, "0:a"
+    return [*seek, "-i", str(src.resolve())], 1, "0:a"
+
+
+def render_clip(src, out: Path, start: float, end: float, words: list[dict],
                 mode: str = "blur", captions: bool = True, logo: Path | None = None,
                 logo_pos: str = "tr", logo_scale: float = 0.18, music: Path | None = None,
                 music_volume: float = 0.12, src_has_audio: bool = True) -> None:
@@ -57,8 +70,7 @@ def render_clip(src: Path, out: Path, start: float, end: float, words: list[dict
     if use_caps:
         build_ass(clip_words, start, ass)
 
-    inputs = ["-ss", f"{start:.2f}", "-to", f"{end:.2f}", "-i", str(src.resolve())]
-    n = 1
+    inputs, n, a_ref = _inputs(src, start, end)
     logo_idx = music_idx = None
     if logo and logo_pos in LOGO_POS:
         inputs += ["-i", str(logo.resolve())]
@@ -70,8 +82,8 @@ def render_clip(src: Path, out: Path, start: float, end: float, words: list[dict
     if mode == "fill":
         chain = [f"[0:v]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[v0]"]
     else:
-        chain = [f"[0:v]split[a][b];[a]scale={W}:{H}:force_original_aspect_ratio=increase,"
-                 f"crop={W}:{H},boxblur=25:5[bg];[b]scale={W}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]"]
+        chain = [f"[0:v]split[a][b];[a]scale=270:480:force_original_aspect_ratio=increase,"
+                 f"crop=270:480,boxblur=8:2,scale={W}:{H}[bg];[b]scale={W}:-2[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]"]
     last = "v0"
     if logo_idx is not None:
         chain.append(f"[{logo_idx}:v]scale={int(W * logo_scale)}:-1[lg];[{last}][lg]overlay={LOGO_POS[logo_pos]}[v1]")
@@ -81,14 +93,14 @@ def render_clip(src: Path, out: Path, start: float, end: float, words: list[dict
     dur = end - start
     fade = f"afade=t=out:st={max(dur - 0.8, 0):.2f}:d=0.8"
     if music_idx is not None and src_has_audio:
-        chain.append(f"[0:a]volume=1[oa];[{music_idx}:a]volume={music_volume}[ma];"
+        chain.append(f"[{a_ref}]volume=1[oa];[{music_idx}:a]volume={music_volume}[ma];"
                      f"[oa][ma]amix=inputs=2:duration=first:normalize=0,{fade}[a]")
         amap = ["-map", "[a]"]
     elif music_idx is not None:
         chain.append(f"[{music_idx}:a]volume={max(music_volume, 0.6)},{fade}[a]")
         amap = ["-map", "[a]"]
     else:
-        amap = ["-map", "0:a?"]
+        amap = ["-map", f"{a_ref}?"]
 
     cmd = ["ffmpeg", "-y", "-loglevel", "error", *inputs, "-filter_complex", ";".join(chain),
            "-map", "[v]", *amap, "-t", f"{dur:.2f}", "-c:v", "libx264", "-crf", "20",

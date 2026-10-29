@@ -94,24 +94,30 @@ def process_youtube(url: str, vid: str, title: str, work: Path, out_dir: Path, c
     picks = highlights.pick(segments, campaign, campaign.get("clips_per_video", 8))
     progress(f"Claude chose {len(picks)} moments.")
     words = [w for s in segments for w in s["words"]]
-    results = []
+    results, spec = [], None
     for i, p in enumerate(picks, 1):
         name = f"yt_{vid}_{i:02d}"
-        sec_start = max(0.0, p["start"] - 1.0)
-        t0 = time.time()
-        progress(f"Downloading moment {i}/{len(picks)} ({int(p['start'])}s–{int(p['end'])}s)…",
-                 round((i - 1) / len(picks) * 100))
-        section = youtube.download_section(url, sec_start, p["end"] + 1.0, work / f"{name}.src.mp4")
-        shifted = [{**w, "start": w["start"] - sec_start, "end": w["end"] - sec_start} for w in words
-                   if sec_start - 0.1 <= w["start"] <= p["end"] + 1.0]
-        progress(f"Downloaded in {time.time() - t0:.0f}s. Rendering clip {i}/{len(picks)}…")
         out = out_dir / f"{name}.mp4"
-        render.render_clip(section, out, p["start"] - sec_start, p["end"] - sec_start, shifted,
-                           mode=campaign.get("frame_mode", "blur"), logo=logo,
-                           logo_pos=campaign.get("logo_position", "tr"),
-                           logo_scale=campaign.get("logo_scale", 0.18), music=music,
-                           music_volume=campaign.get("music_volume", 0.12))
-        section.unlink(missing_ok=True)
+        t0 = time.time()
+        kw = dict(mode=campaign.get("frame_mode", "blur"), logo=logo,
+                  logo_pos=campaign.get("logo_position", "tr"),
+                  logo_scale=campaign.get("logo_scale", 0.18), music=music,
+                  music_volume=campaign.get("music_volume", 0.12))
+        progress(f"Clip {i}/{len(picks)} ({int(p['start'])}s–{int(p['end'])}s): streaming and rendering…",
+                 round((i - 1) / len(picks) * 100))
+        try:  # fast path: ffmpeg reads only this range straight from YouTube, one encode
+            if spec is None or time.time() - spec["fetched"] > 3000:
+                spec = youtube.stream_spec(url)
+            render.render_clip(spec, out, p["start"], p["end"], words, **kw)
+        except Exception as e:
+            progress(f"Streaming failed ({str(e)[:80]}). Downloading the section instead…")
+            spec = None
+            sec_start = max(0.0, p["start"] - 1.0)
+            section = youtube.download_section(url, sec_start, p["end"] + 1.0, work / f"{name}.src.mp4")
+            shifted = [{**w, "start": w["start"] - sec_start, "end": w["end"] - sec_start} for w in words
+                       if sec_start - 0.1 <= w["start"] <= p["end"] + 1.0]
+            render.render_clip(section, out, p["start"] - sec_start, p["end"] - sec_start, shifted, **kw)
+            section.unlink(missing_ok=True)
         progress(f"Clip {i} done in {time.time() - t0:.0f}s: {p['title']}")
         text = caption_text(p, campaign)
         out.with_suffix(".txt").write_text(f"{p['title']}\n\n{text}\n")

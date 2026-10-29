@@ -40,6 +40,21 @@ def _opts(**extra) -> dict:
     return opts
 
 
+FORMAT = "bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]"
+
+
+def stream_spec(url: str) -> dict:
+    """Direct (temporary, signed) stream URLs so ffmpeg can read just the part it needs."""
+    with yt_dlp.YoutubeDL(_opts(format=FORMAT)) as ydl:
+        d = ydl.extract_info(url, download=False)
+    fmts = d.get("requested_formats") or [d]
+    video = next(f for f in fmts if f.get("vcodec") not in (None, "none"))
+    audio = next((f for f in fmts if f is not video and f.get("acodec") not in (None, "none")), None)
+    headers = {**d.get("http_headers", {}), **video.get("http_headers", {})}
+    return {"video": video["url"], "audio": audio["url"] if audio else None,
+            "headers": "".join(f"{k}: {v}\r\n" for k, v in headers.items()), "fetched": time.time()}
+
+
 def info(url: str) -> dict:
     with yt_dlp.YoutubeDL(_opts()) as ydl:
         d = ydl.extract_info(url, download=False)
@@ -155,8 +170,7 @@ def download_section(url: str, start: float, end: float, dest: Path) -> Path:
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.unlink(missing_ok=True)
     with yt_dlp.YoutubeDL(_opts(
-            format="bv*[height<=1080][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=1080]+ba/b[height<=1080]",
-            merge_output_format="mp4", download_ranges=download_range_func(None, [(start, end)]),
+            format=FORMAT, merge_output_format="mp4", download_ranges=download_range_func(None, [(start, end)]),
             force_keyframes_at_cuts=True, outtmpl=str(dest.with_suffix(".%(ext)s")))) as ydl:
         ydl.download([url])
     return dest
