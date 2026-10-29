@@ -1,7 +1,7 @@
 """Pick clip-worthy moments from a transcript using Claude (or a plain fallback)."""
 import threading
 
-from . import config
+from . import config, llm
 
 TOOL = {
     "name": "submit_clips",
@@ -111,12 +111,9 @@ def _ask(client, usage, window: list[dict], campaign: dict, per: int, min_s: int
         f"(topics, banned segments such as ad reads or sponsors).\n\n"
         f"Transcript (seconds):\n{_fmt(window)}"
     )
-    resp = client.messages.create(
-        model=config.CLAUDE_MODEL, max_tokens=3000, tools=[TOOL],
-        tool_choice={"type": "tool", "name": "submit_clips"},
-        messages=[{"role": "user", "content": prompt}])
-    usage.add(config.CLAUDE_MODEL, resp.usage)
-    return next((b.input.get("clips", []) for b in resp.content if b.type == "tool_use"), [])
+    data, u = llm.call_tool(client, config.CLAUDE_MODEL, TOOL, prompt, 3000)
+    usage.add(config.CLAUDE_MODEL, u)
+    return data.get("clips", [])
 
 
 REFINE_TOOL = {
@@ -162,12 +159,9 @@ def _refine(client, usage, segments, cands, campaign, count, min_s, max_s):
         f"Drop weak or rule-breaking candidates and avoid near-duplicates. Return at most {count} clips, "
         f"best first. Write the title and a one-line caption (no hashtags) that follow the brief's caption "
         f"rules, including required @mentions, with no clickbait. Score 1-10.\n\n" + "\n\n".join(blocks))
-    resp = client.messages.create(
-        model=config.REFINE_MODEL, max_tokens=4000, tools=[REFINE_TOOL],
-        tool_choice={"type": "tool", "name": "submit_final"},
-        messages=[{"role": "user", "content": prompt}])
-    usage.add(config.REFINE_MODEL, resp.usage)
-    raw = next((b.input.get("clips", []) for b in resp.content if b.type == "tool_use"), [])
+    data, u = llm.call_tool(client, config.REFINE_MODEL, REFINE_TOOL, prompt, 4000)
+    usage.add(config.REFINE_MODEL, u)
+    raw = data.get("clips", [])
     out = []
     for r in raw:
         a, b = r.get("start_line"), r.get("end_line")

@@ -3,7 +3,7 @@ import re
 import urllib.request
 from pathlib import Path
 
-from . import config
+from . import config, llm
 
 MAX_CHARS = 60_000
 GDOC = re.compile(r"^https://docs\.google\.com/document/d/([\w-]+)")
@@ -60,11 +60,8 @@ def analyze(text: str) -> dict:
     if not config.ANTHROPIC_API_KEY:
         return {"rules": text[:3000], "hashtags": tags, "note": "No API key: raw text used."}
     import anthropic
-    resp = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY).messages.create(
-        model=config.CLAUDE_MODEL, max_tokens=1500, tools=[TOOL],
-        tool_choice={"type": "tool", "name": "set_brief"},
-        messages=[{"role": "user", "content":
-                   "Extract the requirements of this clipping campaign brief. Only include what the "
-                   "brief states; omit fields it doesn't mention.\n\n<brief>\n" + text + "\n</brief>"}])
-    out = next((b.input for b in resp.content if b.type == "tool_use"), {})
+    out, _ = llm.call_tool(
+        anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY), config.CLAUDE_MODEL, TOOL,
+        "Extract the requirements of this clipping campaign brief. Only include what the "
+        "brief states; omit fields it doesn't mention.\n\n<brief>\n" + text + "\n</brief>", 1500)
     return {k: v for k, v in out.items() if v not in (None, "", [], 0)}
