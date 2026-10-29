@@ -3,16 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>Clip</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%236d7cff'/%3E%3Cpath d='M12 9.5v13l11-6.5z' fill='white'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<aside>
-  <h1>🎬 Clip</h1>
-  <nav id="campaigns"></nav>
-  <button id="new" class="primary">+ New campaign</button>
+<aside class="side">
+  <a class="brand" href="#/"><span class="mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13L19 12z"/></svg></span><span>Clip</span></a>
+  <div class="side-label">Campaigns</div>
+  <nav id="campaigns" aria-label="Campaigns"></nav>
+  <button id="new" class="btn new"><svg class="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg>New campaign</button>
 </aside>
-<main id="main"><p class="empty">Add a campaign on the left to get started.</p></main>
+<main id="main"></main>
+<div id="toast" role="status" aria-live="polite"></div>
 <script src="app.js"></script>
 </body>
 </html>

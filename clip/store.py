@@ -41,7 +41,24 @@ def _write(cid: str, data: dict) -> None:
     tmp.replace(p)  # atomic, so a reader never sees half a file
 
 
+def _coerce(key: str, value):
+    """Convert a setting to its proper type, or raise ValueError (blank and junk are rejected)."""
+    want = type(DEFAULTS[key])
+    if want is list:
+        return value if isinstance(value, list) else str(value).split()
+    if want in (int, float):
+        if isinstance(value, bool) or str(value).strip() == "":
+            raise ValueError(key)
+        return int(float(value)) if want is int else float(value)
+    return str(value)
+
+
 def _norm(data: dict) -> dict:
+    for k, v in DEFAULTS.items():  # settings added later, or saved blank / as text by older versions
+        try:
+            data[k] = _coerce(k, data[k]) if k in data else v
+        except (ValueError, TypeError):
+            data[k] = v
     data.setdefault("assets", [])
     data.setdefault("brief_text", "")
     data.setdefault("content", [])
@@ -74,7 +91,12 @@ def create(fields: dict) -> dict:
 def update(cid: str, fields: dict) -> dict:
     with _lock:
         data = get(cid)
-        data.update({k: v for k, v in fields.items() if k in DEFAULTS})
+        for k, v in fields.items():
+            if k in DEFAULTS:
+                try:
+                    data[k] = _coerce(k, v)
+                except (ValueError, TypeError):
+                    pass  # blank or invalid: keep the current value
         _write(cid, data)
     return data
 
@@ -225,6 +247,9 @@ def migrate_all() -> int:
         for p in ROOT.glob("*/campaign.json"):
             data = json.loads(p.read_text())
             if "content" in data:
+                fixed = _norm(json.loads(p.read_text()))  # repair blank / text-typed settings in place
+                if fixed != data:
+                    _write(data["id"], fixed)
                 continue
             shutil.copy2(p, p.with_name("campaign.json.bak-v1"))
             _write(data["id"], _migrate(data))
