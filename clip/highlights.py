@@ -100,7 +100,8 @@ def _ask(client, usage, window: list[dict], campaign: dict, per: int, min_s: int
     where = f"This is minutes {a / 60:.0f}-{b / 60:.0f} of a {total / 60:.0f}-minute video. " if total > WINDOW * 1.5 else ""
     prompt = (
         f"You find the best short-form clips (TikTok/Reels/Shorts) in a transcript.\n"
-        f"Campaign: {campaign.get('name')}\nRules/brief: {campaign.get('rules') or 'none'}\n\n"
+        f"Campaign: {campaign.get('name')}\nTarget platform: {_platform(campaign)}\n"
+        f"Rules/brief: {campaign.get('rules') or 'none'}\n\n"
         f"{where}Pick up to {per} non-overlapping moments from this section, each {min_s}-{max_s} "
         f"seconds long. Each must start on a strong hook, be a complete thought that makes sense "
         f"standalone, and not end mid-sentence. Prefer surprising, funny, emotional or high-value "
@@ -133,6 +134,14 @@ REFINE_TOOL = {
         "required": ["candidate", "start_line", "end_line", "title", "caption", "score"],
     }}}, "required": ["clips"]},
 }
+
+
+def _platform(campaign: dict) -> str:
+    p = campaign.get("platform", "Any")
+    if p == "Any":
+        return ("not chosen. If the brief gives different @handles or topics per platform, use the "
+                "YouTube Shorts ones consistently for every clip")
+    return f"{p}. If the brief gives different @handles or topics per platform, follow only this platform's"
 
 
 _END = ('.', '?', '!', '…')
@@ -201,7 +210,8 @@ def _refine(client, usage, segments, cands, campaign, count, min_s, max_s):
         blocks.append(f"## Candidate {n}: \"{c['title']}\" (rough {c['start']:.0f}-{c['end']:.0f}s)\n{lines}")
     prompt = (
         f"You are the final editor cutting short-form clips from a long video.\n"
-        f"Campaign: {campaign.get('name')}\nRules/brief: {campaign.get('rules') or 'none'}\n\n"
+        f"Campaign: {campaign.get('name')}\nTarget platform: {_platform(campaign)}\n"
+        f"Rules/brief: {campaign.get('rules') or 'none'}\n\n"
         f"Below are candidate moments, each with surrounding transcript lines (index| [start-end] text). "
         f"For each good one choose start_line and end_line so that the clip:\n"
         f"- OPENS on the hook: the first line must stand alone, never a fragment, never a reply to something "
