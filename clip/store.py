@@ -4,6 +4,7 @@ A campaign holds the brief, settings and shared assets (logo, music, brief files
 Each piece of content (one video or YouTube link) is its own item with its own clips."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import shutil
@@ -41,6 +42,10 @@ def _write(cid: str, data: dict) -> None:
     tmp.replace(p)  # atomic, so a reader never sees half a file
 
 
+def rules_hash(rules: str) -> str:
+    return hashlib.sha1((rules or "").strip().encode()).hexdigest()[:8]
+
+
 def _coerce(key: str, value):
     """Convert a setting to its proper type, or raise ValueError (blank and junk are rejected)."""
     want = type(DEFAULTS[key])
@@ -62,6 +67,8 @@ def _norm(data: dict) -> dict:
     data.setdefault("assets", [])
     data.setdefault("brief_text", "")
     data.setdefault("content", [])
+    data.setdefault("checks", {"items": [], "hash": ""})
+    data["checks"]["stale"] = bool(data["checks"]["items"]) and data["checks"].get("hash") != rules_hash(data.get("rules", ""))
     return data
 
 
@@ -189,6 +196,25 @@ def delete_content(cid: str, xid: str) -> dict:
         data["content"] = [x for x in data["content"] if x["id"] != xid]
         _write(cid, data)
     return item
+
+
+def set_checks(cid: str, checks: dict) -> None:
+    with _lock:
+        data = get(cid)
+        data["checks"] = checks
+        _write(cid, data)
+
+
+def set_clip_field(cid: str, xid: str, filename: str, key: str, value) -> None:
+    """Set a field the client may not write itself (e.g. the QA result)."""
+    with _lock:
+        data = get(cid)
+        for c in _item(data, xid)["clips"]:
+            if c["file"] == filename:
+                c[key] = value
+                _write(cid, data)
+                return
+    raise KeyError(filename)
 
 
 def add_clips(cid: str, xid: str, clips: list[dict]) -> None:

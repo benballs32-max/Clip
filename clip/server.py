@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import assets, briefs, config, edits, store, youtube
+from . import assets, briefs, config, edits, qa, store, youtube
 from .pipeline import process_source, process_youtube
 
 app = FastAPI(title="Clip")
@@ -422,6 +422,61 @@ def editor_proxy(cid: str, name: str):
     if not path.exists():
         raise HTTPException(404)
     return FileResponse(path, media_type="video/mp4")
+
+
+# ---------------- pre-submission checks ----------------
+
+@app.post("/api/campaigns/{cid}/checks/generate")
+def checks_generate(cid: str):
+    c = _campaign(cid)
+    try:
+        checks = qa.generate_checks(c)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Couldn't build the checklist: {str(e)[:200]}")
+    store.set_checks(cid, checks)
+    return store.get(cid)["checks"]
+
+
+@app.put("/api/campaigns/{cid}/checks")
+def checks_save(cid: str, body: dict = Body(...)):
+    c = _campaign(cid)
+    store.set_checks(cid, qa.clean_checks(body, c))
+    return store.get(cid)["checks"]
+
+
+@app.post("/api/campaigns/{cid}/content/{xid}/clips/{file}/qa")
+def clip_qa(cid: str, xid: str, file: str):
+    _, clip = _clip(cid, xid, file)
+    try:
+        return qa.run_qa(cid, xid, clip["file"])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"The check failed: {str(e)[:200]}")
+
+
+@app.post("/api/campaigns/{cid}/content/{xid}/qa-all")
+def qa_all(cid: str, xid: str, body: dict = Body(default={})):
+    item = _content(cid, xid)
+    have = {c["file"] for c in item["clips"]}
+    files = [Path(f).name for f in body.get("files", [])] or [c["file"] for c in item["clips"]]
+    files = [f for f in files if f in have]
+    if not files:
+        raise HTTPException(400, "No clips to check.")
+
+    def run(log, pct):
+        for n, f in enumerate(files, 1):
+            log(f"Checking {n}/{len(files)}: {f}", round((n - 1) / len(files) * 100))
+            try:
+                r = qa.run_qa(cid, xid, f)
+                bad = [i["label"] for i in r["items"] if i["status"] in ("fail", "warn")]
+                log(f"  {r['verdict'].upper()}" + (f": {'; '.join(bad)[:140]}" if bad else ""))
+            except Exception as e:
+                log(f"  Skipped: {str(e)[:140]}")
+        log("All done.", 100)
+    return _start_job(cid, xid, f"Check {len(files)} clips", "qa", run)
 
 
 # ---------------- clips ----------------
