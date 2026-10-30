@@ -85,7 +85,7 @@ def process_source(src: Path, rel: str, out_dir: Path, campaign: dict,
             logo=logo, logo_pos=campaign.get("logo_position", "tr"),
             logo_scale=campaign.get("logo_scale", 0.18), music=music,
             music_volume=campaign.get("music_volume", 0.12) if not visual else max(campaign.get("music_volume", 0.12), 0.6),
-            src_has_audio=src_audio)
+            src_has_audio=src_audio, style=campaign)
         progress(f"Clip {i} done in {time.time() - t0:.0f}s: {p['title']}")
         text = caption_text(p, campaign)
         out.with_suffix(".txt").write_text(f"{p['title']}\n\n{text}\n")
@@ -121,7 +121,7 @@ def process_youtube(url: str, vid: str, title: str, work: Path, out_dir: Path, c
         kw = dict(mode=campaign.get("frame_mode", "blur"), logo=logo,
                   logo_pos=campaign.get("logo_position", "tr"),
                   logo_scale=campaign.get("logo_scale", 0.18), music=music,
-                  music_volume=campaign.get("music_volume", 0.12))
+                  music_volume=campaign.get("music_volume", 0.12), style=campaign)
         progress(f"Clip {i}/{len(picks)} ({int(p['start'])}s–{int(p['end'])}s): streaming and rendering…",
                  round((i - 1) / len(picks) * 100))
         try:  # fast path: ffmpeg reads only this range straight from YouTube, one encode

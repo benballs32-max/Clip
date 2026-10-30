@@ -11,7 +11,7 @@ const tc = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, 
 const fmt = n => n > 1e9 ? (n / 1e9).toFixed(1) + " GB" : n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.ceil(n / 1e3) + " KB";
 const dur = t => t >= 3600 ? `${Math.floor(t / 3600)}h ${Math.round(t % 3600 / 60)}m` : t >= 60 ? `${Math.floor(t / 60)}m ${Math.round(t % 60)}s` : `${Math.round(t)}s`;
 const money = n => "$" + (+n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const ROLES = ["logo", "music", "image", "brief", "ignore"];
+const ROLES = ["logo", "music", "image", "brief", "font", "ignore"];
 const STATUSES = ["new", "approved", "rejected", "posted"];
 const TAGL = { hook: "Punchline first", keyword: "Keyword", loop: "Loop", edited: "Edited" };
 
@@ -36,7 +36,7 @@ const PATHS = {
   scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>',
 };
 const I = (n, s = 16) => `<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${PATHS[n]}</svg>`;
-const KIND = { youtube: "youtube", video: "film", image: "image", audio: "music", doc: "file", other: "file" };
+const KIND = { youtube: "youtube", video: "film", image: "image", audio: "music", doc: "file", font: "file", other: "file" };
 const kindIcon = (k, s) => I(KIND[k] || "empty", s);
 
 let toastTimer;
@@ -119,6 +119,13 @@ async function addContent(cid) {
 }
 
 // ---------- campaign page: brief, settings, shared files ----------
+const CAP_PRESETS = {
+  Classic: { cap_font: "Inter", cap_size: 84, cap_color: "#FFFFFF", cap_highlight: "#FFE500", cap_style: "outline", cap_pos: "low", cap_words: 3, cap_upper: true, cap_pop: false },
+  Pop: { cap_font: "League Spartan", cap_size: 96, cap_color: "#FFFFFF", cap_highlight: "#FFE500", cap_style: "outline", cap_pos: "low", cap_words: 2, cap_upper: true, cap_pop: true },
+  Clean: { cap_font: "Inter", cap_size: 72, cap_color: "#FFFFFF", cap_highlight: "#7EE8FA", cap_style: "shadow", cap_pos: "low", cap_words: 4, cap_upper: false, cap_pop: false },
+  Boxed: { cap_font: "Roboto", cap_size: 70, cap_color: "#FFFFFF", cap_highlight: "#FFD400", cap_style: "box", cap_pos: "low", cap_words: 3, cap_upper: false, cap_pop: false },
+  Impact: { cap_font: "Bebas Neue", cap_size: 116, cap_color: "#FFFFFF", cap_highlight: "#FF4D4D", cap_style: "outline", cap_pos: "low", cap_words: 3, cap_upper: true, cap_pop: true },
+};
 const field = (label, input, cls = "") => `<label class="field ${cls}">${label}${input}</label>`;
 const opts = (list, cur) => list.map(([v, t]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${t}</option>`).join("");
 
@@ -154,7 +161,7 @@ function renderCampaign(c) {
         ${field("Budget / payout notes", `<input name="budget_note" value="${esc(c.budget_note)}" placeholder="e.g. $300 cap per clip">`)}</div></div>
       <div class="group"><h3>Rules</h3><div class="grid">
         ${field(`Brief and rules <small>Claude uses this to pick clips and write captions.</small>`, `<textarea name="rules" style="min-height:170px">${esc(c.rules)}</textarea>`, "full")}</div></div>
-      <div class="group"><h3>Captions</h3><div class="grid">
+      <div class="group"><h3>Post caption</h3><div class="grid">
         ${field("Hashtags (space separated)", `<input name="hashtags" value="${esc(c.hashtags.join(" "))}" placeholder="#example #tags">`)}
         ${field("Disclosure tag", `<input name="disclosure" value="${esc(c.disclosure)}">`)}</div></div>
       <div class="group"><h3>Clip style</h3><div class="grid three">
@@ -162,6 +169,19 @@ function renderCampaign(c) {
         ${field("Max seconds", `<input name="max_seconds" type="number" value="${c.max_seconds}">`)}
         ${field("Max clips per video", `<input name="clips_per_video" type="number" value="${c.clips_per_video}">`)}
         ${field("Framing", `<select name="frame_mode">${opts([["blur", "Fit + blurred background"], ["fill", "Fill (center crop)"]], c.frame_mode)}</select>`, "full")}</div></div>
+      <div class="group"><h3>Subtitles</h3><div class="capstyle"><div>
+        <div class="presets" id="capPresets">${Object.keys(CAP_PRESETS).map(n => `<button type="button" class="btn sm" data-p="${n}">${n}</button>`).join("")}</div>
+        <div class="grid" style="margin-top:12px">
+        ${field("Font", `<select name="cap_font"><option>${esc(c.cap_font)}</option></select>`)}
+        ${field("Size", `<input name="cap_size" type="number" min="40" max="160" value="${c.cap_size}">`)}
+        ${field("Text colour", `<input name="cap_color" type="color" value="${esc(c.cap_color)}">`)}
+        ${field("Highlight colour", `<input name="cap_highlight" type="color" value="${esc(c.cap_highlight)}">`)}
+        ${field("Look", `<select name="cap_style">${opts([["outline", "Outline"], ["shadow", "Soft shadow"], ["box", "Dark box"]], c.cap_style)}</select>`)}
+        ${field("Position", `<select name="cap_pos">${opts([["low", "Low"], ["mid", "Middle"], ["high", "High"]], c.cap_pos)}</select>`)}
+        ${field("Words per line", `<input name="cap_words" type="number" min="1" max="5" value="${c.cap_words}">`)}
+        <div class="field"><span>Options</span><div class="row" style="height:36px;gap:18px"><label class="check"><input type="checkbox" name="cap_upper" ${c.cap_upper ? "checked" : ""}> Uppercase</label><label class="check"><input type="checkbox" name="cap_pop" ${c.cap_pop ? "checked" : ""}> Pop the spoken word</label></div></div>
+        </div><p class="mute" style="margin-top:10px">Upload a font file (.ttf or .otf) under “Logo, music and other files” and it appears in the Font list.</p></div>
+        <div class="capprev"><img id="capprev" alt="Subtitle preview"><span class="mute">Preview, drawn by the real renderer</span></div></div></div>
       <div class="group"><h3>Branding</h3><div class="grid three">
         ${field("Logo position", `<select name="logo_position">${opts([["tr", "Top right"], ["tl", "Top left"], ["br", "Bottom right"], ["bl", "Bottom left"], ["off", "Off"]], c.logo_position)}</select>`)}
         ${field("Logo size (fraction of width)", `<input name="logo_scale" type="number" step="0.01" min="0.05" max="0.6" value="${c.logo_scale}">`)}
@@ -192,6 +212,30 @@ function renderCampaign(c) {
 
   bindChecks(c);
   const form = $("#f"), save = $("#save"), state = $("#saved");
+  // subtitle style: font list, presets and a live preview from the real renderer
+  const capKeys = ["cap_font", "cap_size", "cap_color", "cap_highlight", "cap_style", "cap_pos", "cap_words"];
+  let prevTimer;
+  const refreshPreview = () => {
+    clearTimeout(prevTimer);
+    prevTimer = setTimeout(() => {
+      const q = new URLSearchParams(Object.fromEntries(capKeys.map(k => [k, form.elements[k].value])));
+      q.set("cap_upper", form.elements.cap_upper.checked ? "1" : "0"); q.set("cap_pop", form.elements.cap_pop.checked ? "1" : "0"); q.set("t", Date.now());
+      $("#capprev").src = `/api/campaigns/${c.id}/caption-preview.png?${q}`;
+    }, 250);
+  };
+  api(`/api/campaigns/${c.id}/fonts`).then(f => {
+    const sel = form.elements.cap_font, cur = c.cap_font, names = [...f.builtin, ...f.uploaded.map(u => u.family)];
+    if (!names.includes(cur)) names.push(cur);
+    sel.innerHTML = names.map(n => `<option ${n === cur ? "selected" : ""}>${esc(n)}</option>`).join(""); refreshPreview();
+  }).catch(refreshPreview);
+  $$("#capPresets button").forEach(b => b.onclick = () => {
+    const p = CAP_PRESETS[b.dataset.p];
+    for (const [k, v] of Object.entries(p)) { const el = form.elements[k]; if (!el) continue; if (el.type === "checkbox") el.checked = v; else { if (el.tagName === "SELECT" && ![...el.options].some(o => o.value === String(v))) el.add(new Option(v, v)); el.value = v; } }
+    form.dispatchEvent(new Event("input", { bubbles: true })); refreshPreview();
+  });
+  // getAttribute, not .name: the form has a field called "name" that shadows form.name
+  const capEvent = e => { const n = e.target.getAttribute && e.target.getAttribute("name"); if (n && n.startsWith("cap_")) refreshPreview(); };
+  form.addEventListener("input", capEvent); form.addEventListener("change", capEvent);
   const dirty = () => { save.disabled = false; state.textContent = "Unsaved changes"; state.className = "state"; };
   form.addEventListener("input", dirty); form.addEventListener("change", dirty);
   form.onsubmit = async e => {
@@ -199,7 +243,8 @@ function renderCampaign(c) {
     const d = Object.fromEntries(new FormData(form));
     d.hashtags = d.hashtags.split(/\s+/).filter(Boolean);
     ["rate_cpm", "logo_scale", "music_volume"].forEach(k => d[k] = d[k] === "" ? null : parseFloat(d[k]));
-    ["min_seconds", "max_seconds", "clips_per_video"].forEach(k => d[k] = d[k] === "" ? null : parseInt(d[k]));
+    ["min_seconds", "max_seconds", "clips_per_video", "cap_size", "cap_words"].forEach(k => d[k] = d[k] === "" ? null : parseInt(d[k]));
+    d.cap_upper = form.elements.cap_upper.checked; d.cap_pop = form.elements.cap_pop.checked;
     Object.keys(d).forEach(k => d[k] === null && delete d[k]);  // blank = keep the current value
     try {
       await api(`/api/campaigns/${c.id}`, { method: "PATCH", body: d });
@@ -241,9 +286,9 @@ function renderCampaign(c) {
 
 // ---------- campaign page: the pre-submission checklist ----------
 function checksCard(c) {
-  const items = c.checks.items, kinds = [["caption", "Caption"], ["visual", "Video frames"], ["speech", "Speech"], ["manual", "Reminder"]];
+  const items = c.checks.items, kinds = [["caption", "Caption"], ["visual", "Video frames"], ["speech", "Speech"], ["length", "Length"], ["manual", "Reminder"]];
   const row = (i, n) => `<div class="ckrow" data-n="${n}"><input type="checkbox" class="ckon" ${i.enabled ? "checked" : ""} aria-label="Enabled">
-      <input class="cktext" value="${esc(i.text)}"><select class="ckkind">${kinds.map(([v, t]) => `<option value="${v}" ${(i.kind === v || (i.kind === "length" && v === "speech")) ? "selected" : ""}>${t}</option>`).join("")}</select>
+      <input class="cktext" value="${esc(i.text)}"><select class="ckkind">${kinds.map(([v, t]) => `<option value="${v}" ${i.kind === v ? "selected" : ""}>${t}</option>`).join("")}</select>
       <button class="icon-btn ckrm" title="Remove">${I("x", 15)}</button></div>`;
   return `<section class="card" id="checks">
     <header><h2>Pre-submission checks</h2><div class="row"><button class="btn sm" id="ckgen">${I("shield", 14)}${items.length ? "Rebuild from brief" : "Build from brief"}</button><button class="btn sm" id="ckadd">${I("plus", 13)}Add check</button></div></header>

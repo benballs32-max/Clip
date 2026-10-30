@@ -101,7 +101,8 @@ def editor_info(cid: str, item: dict, clip: dict, campaign: dict) -> dict:
                                                         "overlays": [], "captions": True, "tags": []},
         "clip": {"file": clip["file"], "title": clip["title"], "caption": clip.get("caption", ""),
                  "start": clip["start"], "end": clip["end"]},
-        "settings": {k: campaign[k] for k in ("frame_mode", "logo_position", "logo_scale", "music_volume")},
+        "settings": {k: campaign[k] for k in ("frame_mode", "logo_position", "logo_scale", "music_volume",
+                                              *render.CAP_DEFAULTS)},
     }
 
 
@@ -283,6 +284,12 @@ def propose(cid: str, item: dict, clip: dict, modes: list[str], campaign: dict, 
 
 # ---------------------------------------------------------------- export
 
+def style_for(cid: str, campaign: dict) -> dict:
+    """The campaign settings plus the folder of uploaded fonts (if any), for the renderer."""
+    has_font = any(a["role"] == "font" for a in campaign["assets"])
+    return {**campaign, "fontsdir": str(store.cdir(cid) / "assets") if has_font else None}
+
+
 def _media(cid: str, campaign: dict):
     root = store.cdir(cid) / "assets"
     pick = lambda role, kind: next((root / a["path"] for a in campaign["assets"]
@@ -318,7 +325,7 @@ def export_edl(cid: str, xid: str, file: str, edl: dict, say=None, pct_cb=None,
     render.render_edit(src, out, segs, words, overlays=edl["overlays"], captions=edl["captions"],
                        mode=campaign["frame_mode"], logo=logo, logo_pos=campaign["logo_position"],
                        logo_scale=campaign["logo_scale"], music=music, music_volume=campaign["music_volume"],
-                       src_has_audio=has_audio, pct_cb=pct_cb)
+                       src_has_audio=has_audio, pct_cb=pct_cb, style=style_for(cid, campaign))
     labels = [TAG_LABEL[t] for t in edl["tags"]] or ["Edited"]
     new = {"file": out.name, "source": clip.get("source", ""), "title": clip["title"], "caption": clip.get("caption", ""),
            "start": min(s["start"] for s in edl["segments"]), "end": max(s["end"] for s in edl["segments"]),

@@ -7,14 +7,15 @@ VIDEO = {".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi"}
 IMAGE = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 AUDIO = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".aiff", ".ogg"}
 DOC = {".pdf", ".docx", ".txt", ".md"}
-ROLES = ["source", "logo", "music", "image", "brief", "ignore"]
+FONT = {".ttf", ".otf", ".ttc"}
+ROLES = ["source", "logo", "music", "image", "brief", "font", "ignore"]
 ALPHA_FORMATS = {"rgba", "bgra", "argb", "abgr", "ya8", "gbrap", "pal8"}
 LOGO_HINTS = ("logo", "watermark", "brand", "wordmark")
 
 
 def kind_of(path: Path) -> str:
     ext = path.suffix.lower()
-    for name, exts in (("video", VIDEO), ("image", IMAGE), ("audio", AUDIO), ("doc", DOC)):
+    for name, exts in (("video", VIDEO), ("image", IMAGE), ("audio", AUDIO), ("doc", DOC), ("font", FONT)):
         if ext in exts:
             return name
     return "other"
@@ -41,6 +42,10 @@ def classify(path: Path, rel: str) -> dict:
     if kind == "doc":
         info["role"] = "brief"
         return info
+    if kind == "font":
+        info["role"] = "font"
+        info["family"] = font_family(path) or path.stem
+        return info
     if kind == "other":
         return info
     meta = probe(path)
@@ -57,3 +62,14 @@ def classify(path: Path, rel: str) -> dict:
         small = max(info["width"], info["height"]) <= 1500
         info["role"] = "logo" if hinted or (info["alpha"] and small) else "image"
     return info
+
+
+def font_family(path: Path) -> str:
+    """The family name inside a font file (what you type as the font name), or ''."""
+    try:
+        from fontTools.ttLib import TTFont
+        f = TTFont(str(path), fontNumber=0, lazy=True)
+        name = f["name"]
+        return str(name.getDebugName(16) or name.getDebugName(1) or "").strip()
+    except Exception:
+        return ""

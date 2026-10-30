@@ -105,9 +105,11 @@ function mountEditor(c, x, clip, info, base) {
   };
 
   // ---------- drawing ----------
-  function textOut(txt, x0, y0, size, fill) {
-    ctx.font = `800 ${size}px -apple-system, Arial, sans-serif`; ctx.lineJoin = "round";
-    ctx.lineWidth = Math.max(2, size * 0.22); ctx.strokeStyle = "#000"; ctx.strokeText(txt, x0, y0); ctx.fillStyle = fill; ctx.fillText(txt, x0, y0);
+  function textOut(txt, x0, y0, size, fill, mode = "outline", fam = "-apple-system, Arial, sans-serif") {
+    ctx.font = `800 ${size}px ${fam}`; ctx.lineJoin = "round";
+    if (mode === "outline") { ctx.lineWidth = Math.max(2, size * 0.15); ctx.strokeStyle = "#000"; ctx.strokeText(txt, x0, y0); }
+    if (mode === "shadow") { ctx.shadowColor = "rgba(0,0,0,.6)"; ctx.shadowBlur = size * 0.12; ctx.shadowOffsetY = size * 0.04; }
+    ctx.fillStyle = fill; ctx.fillText(txt, x0, y0); ctx.shadowColor = "transparent"; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
   }
   function draw() {
     if (E.dead) return;
@@ -122,15 +124,18 @@ function mountEditor(c, x, clip, info, base) {
       }
     }
     const t = E.t;
-    if (E.edl.captions) {  // 3-word chunks, the spoken word highlighted
-      const w = words(); let j = -1;
-      for (let n = 0; n < w.length; n++) { const e = (n % 3 !== 2 && w[n + 1]) ? w[n + 1].start : w[n].end; if (w[n].start <= t && t < e) { j = n; break; } }
+    if (E.edl.captions) {  // chunks of N words (campaign setting), the spoken word highlighted
+      const w = words(), per = S.cap_words || 3; let j = -1;
+      for (let n = 0; n < w.length; n++) { const e = (n % per !== per - 1 && w[n + 1]) ? w[n + 1].start : w[n].end; if (w[n].start <= t && t < e) { j = n; break; } }
       if (j >= 0) {
-        const c0 = j - j % 3, ch = w.slice(c0, c0 + 3).map(x => x.word.toUpperCase()), size = 84 * K;
-        ctx.font = `800 ${size}px -apple-system, Arial, sans-serif`;
+        const c0 = j - j % per, size = (S.cap_size || 84) * K, up = S.cap_upper !== false, fam = `"${S.cap_font || "Inter"}", -apple-system, Arial, sans-serif`;
+        const ch = w.slice(c0, c0 + per).map(x => up ? x.word.toUpperCase() : x.word), mode = S.cap_style || "outline";
+        ctx.font = `800 ${size}px ${fam}`;
         const gap = ctx.measureText(" ").width, widths = ch.map(s => ctx.measureText(s).width), tw = widths.reduce((a, b) => a + b, 0) + gap * (ch.length - 1);
+        const y = S.cap_pos === "mid" ? CH / 2 + size * 0.35 : S.cap_pos === "high" ? 380 * K + size * 0.85 : CH - 520 * K;
         let x0 = (CW - tw) / 2; ctx.textBaseline = "alphabetic";
-        ch.forEach((s, n) => { textOut(s, x0, CH - 520 * K, size, n === j - c0 ? "#FFE500" : "#fff"); x0 += widths[n] + gap; });
+        if (mode === "box") { ctx.fillStyle = "#181818"; const pad = size * 0.17; ctx.fillRect(x0 - pad, y - size * 0.92, tw + pad * 2, size * 1.32); }
+        ch.forEach((s, n) => { textOut(s, x0, y, size, n === j - c0 ? (S.cap_highlight || "#FFE500") : (S.cap_color || "#fff"), mode, fam); x0 += widths[n] + gap; });
       }
     }
     for (const o of E.edl.overlays) {

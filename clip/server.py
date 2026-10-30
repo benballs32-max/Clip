@@ -1,16 +1,18 @@
 """FastAPI app: campaigns (brief + settings), content items (one video each), generation, clip review."""
 import re
 import shutil
+import subprocess
 import threading
 import time
 import uuid
 from pathlib import Path
 
 from fastapi import Body, FastAPI, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import Request
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import assets, briefs, config, edits, qa, store, youtube
+from . import assets, briefs, config, edits, qa, render, store, youtube
 from .pipeline import process_source, process_youtube
 
 app = FastAPI(title="Clip")
@@ -291,6 +293,7 @@ def _start_job(cid: str, xid: str, title: str, kind: str, fn) -> dict:
 def _generate_fn(cid: str, xid: str):
     def run(log, pct):
         campaign, item = store.get(cid), store.get_content(cid, xid)
+        campaign = edits.style_for(cid, campaign)  # adds the uploaded-fonts folder for the renderer
         pick = lambda role: next((_asset_file(cid, a["path"]) for a in campaign["assets"] if a["role"] == role
                                   and a["kind"] == ("audio" if role == "music" else "image")), None)
         logo, music = pick("logo"), pick("music")
@@ -422,6 +425,47 @@ def editor_proxy(cid: str, name: str):
     if not path.exists():
         raise HTTPException(404)
     return FileResponse(path, media_type="video/mp4")
+
+
+# ---------------- subtitle style: fonts and a live preview ----------------
+
+BUILTIN_FONTS = ["Inter", "Roboto", "Open Sans", "Lato", "League Spartan", "Bebas Neue", "Liberation Sans", "DejaVu Sans"]
+
+
+def _installed_fonts() -> set[str]:
+    try:
+        out = subprocess.run(["fc-list", ":", "family"], capture_output=True, text=True, timeout=5).stdout
+        return {f.strip() for line in out.splitlines() for f in line.split(",")}
+    except Exception:
+        return set()
+
+
+@app.get("/api/campaigns/{cid}/fonts")
+def list_fonts(cid: str):
+    c = _campaign(cid)
+    have = _installed_fonts()
+    builtin = [f for f in BUILTIN_FONTS if not have or f in have] or BUILTIN_FONTS
+    mine = [{"family": a.get("family") or Path(a["path"]).stem, "file": a["path"]} for a in c["assets"] if a["role"] == "font"]
+    return {"builtin": builtin, "uploaded": mine}
+
+
+@app.get("/api/campaigns/{cid}/caption-preview.png")
+def caption_preview(cid: str, request: Request):
+    c = _campaign(cid)
+    style = render.cap_params({**{k: c[k] for k in render.CAP_DEFAULTS}, **dict(request.query_params)})
+    for k in ("cap_upper", "cap_pop"):  # query strings arrive as text
+        if k in request.query_params:
+            style[k] = request.query_params[k] in ("1", "true", "on")
+    fd = edits.style_for(cid, c)["fontsdir"]
+    tmp = store.cdir(cid) / "_work" / "capprev"
+    out = tmp / f"{uuid.uuid4().hex[:8]}.png"
+    try:
+        render.caption_sample(out, style, fd)
+        return Response(out.read_bytes(), media_type="image/png", headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        raise HTTPException(502, str(e)[:200])
+    finally:
+        out.unlink(missing_ok=True)
 
 
 # ---------------- pre-submission checks ----------------

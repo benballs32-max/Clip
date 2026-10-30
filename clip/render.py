@@ -28,12 +28,60 @@ def ass_text(text: str) -> str:
 # overlay position -> (style name, alignment, vertical margin) on a 1080x1920 frame
 TEXT_POS = {"top": ("KeyTop", 8, 300), "center": ("KeyMid", 5, 0), "low": ("KeyLow", 2, 800)}
 
+# subtitle style: every key is a campaign setting
+CAP_DEFAULTS = {"cap_font": "Inter", "cap_size": 84, "cap_color": "#FFFFFF", "cap_highlight": "#FFE500",
+                "cap_style": "outline", "cap_pos": "low", "cap_words": 3, "cap_upper": True, "cap_pop": False}
+CAP_POS = {"low": (2, 520), "mid": (5, 0), "high": (8, 380)}   # alignment, vertical margin
+CAP_STYLES = ("outline", "shadow", "box")
+_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
-def build_ass(words: list[dict], offset: float, path: Path, per_line: int = 3, overlays=()) -> None:
+
+def cap_params(style: dict | None) -> dict:
+    """Merge a campaign (or any dict) over the defaults and make every value safe to use."""
+    st = {k: (style or {}).get(k, v) for k, v in CAP_DEFAULTS.items()}
+    st["cap_font"] = re.sub(r"[^\w .\-]", "", str(st["cap_font"]))[:48] or CAP_DEFAULTS["cap_font"]
+    try:
+        st["cap_size"] = min(max(int(float(st["cap_size"])), 40), 160)
+        st["cap_words"] = min(max(int(float(st["cap_words"])), 1), 5)
+    except (TypeError, ValueError):
+        st["cap_size"], st["cap_words"] = CAP_DEFAULTS["cap_size"], CAP_DEFAULTS["cap_words"]
+    for k in ("cap_color", "cap_highlight"):
+        st[k] = str(st[k]) if _HEX.match(str(st[k])) else CAP_DEFAULTS[k]
+    st["cap_style"] = st["cap_style"] if st["cap_style"] in CAP_STYLES else "outline"
+    st["cap_pos"] = st["cap_pos"] if st["cap_pos"] in CAP_POS else "low"
+    st["cap_upper"], st["cap_pop"] = bool(st["cap_upper"]), bool(st["cap_pop"])
+    return st
+
+
+def _bgr(hexcolor: str, alpha: int = 0) -> str:
+    """#RRGGBB -> ASS &HAABBGGRR (alpha 0 = opaque)."""
+    r, g, b = hexcolor[1:3], hexcolor[3:5], hexcolor[5:7]
+    return f"&H{alpha:02X}{b}{g}{r}".upper()
+
+
+def _style_line(cap: dict) -> str:
+    size, mode = cap["cap_size"], cap["cap_style"]
+    align, mv = CAP_POS[cap["cap_pos"]]
+    prim = _bgr(cap["cap_color"])
+    if mode == "box":      # solid dark box behind the line
+        border, outline, shadow, ocol, back = 3, max(12, int(size * 0.17)), 0, "&H00181818", "&H00181818"
+    elif mode == "shadow":  # no outline, soft drop shadow
+        border, outline, shadow, ocol, back = 1, 0, max(3, int(size * 0.05)), "&H00000000", "&H96000000"
+    else:                  # classic outline
+        border, outline, shadow, ocol, back = 1, max(3, int(size * 0.075)), max(1, int(size * 0.025)), "&H00000000", "&H80000000"
+    return (f"Style: Default,{cap['cap_font']},{size},{prim},{prim},{ocol},{back},-1,0,0,0,100,100,0,0,"
+            f"{border},{outline},{shadow},{align},60,60,{mv},1")
+
+
+def build_ass(words: list[dict], offset: float, path: Path, per_line: int | None = None, overlays=(),
+              style: dict | None = None) -> None:
     """ASS file: caption chunks with the spoken word highlighted, plus optional text overlays.
     Word times are shifted by -offset; overlays are already in output time."""
+    cap = cap_params(style)
+    per_line = per_line or cap["cap_words"]
+    prim, hl = _bgr(cap["cap_color"]), _bgr(cap["cap_highlight"])
     key_styles = "".join(
-        f"Style: {n},Arial,104,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,8,3,{al},70,70,{mv},1\n"
+        f"Style: {n},{cap['cap_font']},104,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,8,3,{al},70,70,{mv},1\n"
         for n, al, mv in TEXT_POS.values())
     head = (
         "[Script Info]\nScriptType: v4.00+\n"
@@ -41,10 +89,11 @@ def build_ass(words: list[dict], offset: float, path: Path, per_line: int = 3, o
         "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,"
         "Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,"
         "Alignment,MarginL,MarginR,MarginV,Encoding\n"
-        "Style: Default,Arial,84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,6,2,2,60,60,520,1\n"
-        + key_styles + "\n"
+        + _style_line(cap) + "\n" + key_styles + "\n"
         "[Events]\nFormat: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text\n"
     )
+    fix = (lambda t: t.upper()) if cap["cap_upper"] else (lambda t: t)
+    pop = "\\fscx86\\fscy86\\t(0,110,\\fscx106\\fscy106)" if cap["cap_pop"] else ""
     lines = []
     for i in range(0, len(words), per_line):
         chunk = words[i:i + per_line]
@@ -54,17 +103,42 @@ def build_ass(words: list[dict], offset: float, path: Path, per_line: int = 3, o
             if end <= start:
                 continue
             text = " ".join(
-                (f"{{\\c&H0000E5FF&}}{ass_text(x['word']).upper()}{{\\c&HFFFFFF&}}" if k == j else ass_text(x["word"]).upper())
+                (f"{{\\c{hl}&{pop}}}{fix(ass_text(x['word']))}{{\\r}}" if k == j else fix(ass_text(x["word"])))
                 for k, x in enumerate(chunk)
             )
             lines.append(f"Dialogue: 0,{_ts(start)},{_ts(end)},Default,,0,0,0,,{text}")
     for o in overlays:  # keyword / title text: fades in with a small pop, fades out
-        style = TEXT_POS.get(o.get("pos"), TEXT_POS["top"])[0]
+        style_name = TEXT_POS.get(o.get("pos"), TEXT_POS["top"])[0]
         s, e = float(o["start"]), float(o["start"]) + float(o["dur"])
         if e > s and str(o.get("text", "")).strip():
-            lines.append(f"Dialogue: 1,{_ts(s)},{_ts(e)},{style},,0,0,0,,"
+            lines.append(f"Dialogue: 1,{_ts(s)},{_ts(e)},{style_name},,0,0,0,,"
                          f"{{\\fad(150,200)\\fscx88\\fscy88\\t(0,180,\\fscx100\\fscy100)}}{ass_text(o['text']).upper()}")
     path.write_text(head + "\n".join(lines) + "\n")
+
+
+def _filter_path(p: str) -> str:
+    return p.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+
+
+def caption_sample(out_png: Path, style: dict | None, fontsdir: str | None = None) -> None:
+    """A 360x640 still showing the subtitle style, rendered by the real renderer."""
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    ass = out_png.with_suffix(".ass")
+    words = [{"word": w, "start": i * 0.4, "end": i * 0.4 + 0.36} for i, w in enumerate("This is how your captions will look".split())]
+    build_ass(words, 0.0, ass, style=style)
+    fd = f":fontsdir={_filter_path(fontsdir)}" if fontsdir else ""
+    vf = f"ass={ass.name}{fd},scale=360:640"
+    base = ["ffmpeg", "-y", "-loglevel", "error"]
+    try:
+        for src in ("gradients=s=1080x1920:c0=0x20242e:c1=0x4a5268:x0=0:y0=0:x1=1080:y1=1920:duration=1:rate=10",
+                    "color=c=0x2a2f3b:s=1080x1920:d=1:r=10"):
+            r = subprocess.run([*base, "-f", "lavfi", "-i", src, "-vf", vf, "-ss", "0.5", "-frames:v", "1", out_png.name],
+                               cwd=out_png.parent, capture_output=True)
+            if r.returncode == 0:
+                return
+        raise RuntimeError("Couldn't render the preview: " + r.stderr.decode()[-200:])
+    finally:
+        ass.unlink(missing_ok=True)
 
 
 LOGO_POS = {  # overlay x:y for a 1080x1920 frame, clear of the caption zone
@@ -132,7 +206,8 @@ def _run(cmd: list[str], cwd: Path, total: float, pct_cb: Callable[[int], None] 
 def render_edit(src, out: Path, segments, words: list[dict], *, overlays=(), mode: str = "blur",
                 captions: bool = True, logo: Path | None = None, logo_pos: str = "tr",
                 logo_scale: float = 0.18, music: Path | None = None, music_volume: float = 0.12,
-                src_has_audio: bool = True, pct_cb: Callable[[int], None] | None = None) -> None:
+                src_has_audio: bool = True, pct_cb: Callable[[int], None] | None = None,
+                style: dict | None = None) -> None:
     """Render ordered source segments [(start, end), ...] to a 1080x1920 clip.
     mode: 'fill' center-crops to 9:16; 'blur' fits the video over a blurred copy."""
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -143,7 +218,7 @@ def render_edit(src, out: Path, segments, words: list[dict], *, overlays=(), mod
     overlays = [o for o in overlays if str(o.get("text", "")).strip()]
     use_ass = bool(cap_words or overlays)
     if use_ass:
-        build_ass(cap_words, 0.0, ass, overlays=overlays)
+        build_ass(cap_words, 0.0, ass, overlays=overlays, style=style)
 
     inputs, n, vi, ai = _seg_inputs(src, segments)
     logo_idx = music_idx = None
@@ -181,7 +256,8 @@ def render_edit(src, out: Path, segments, words: list[dict], *, overlays=(), mod
     if logo_idx is not None:
         chain.append(f"[{logo_idx}:v]scale={int(W * logo_scale)}:-1[lg];[{last}][lg]overlay={LOGO_POS[logo_pos]}[v1]")
         last = "v1"
-    chain.append(f"[{last}]ass={ass.name}[v]" if use_ass else f"[{last}]null[v]")
+    fd = f":fontsdir={_filter_path(str((style or {}).get('fontsdir')))}" if (style or {}).get("fontsdir") else ""
+    chain.append(f"[{last}]ass={ass.name}{fd}[v]" if use_ass else f"[{last}]null[v]")
 
     fade = f"afade=t=out:st={max(total - 0.8, 0):.2f}:d=0.8"
     amap: list[str] = []
@@ -208,11 +284,11 @@ def render_edit(src, out: Path, segments, words: list[dict], *, overlays=(), mod
 def render_clip(src, out: Path, start: float, end: float, words: list[dict], mode: str = "blur",
                 captions: bool = True, logo: Path | None = None, logo_pos: str = "tr",
                 logo_scale: float = 0.18, music: Path | None = None, music_volume: float = 0.12,
-                src_has_audio: bool = True) -> None:
+                src_has_audio: bool = True, style: dict | None = None) -> None:
     """One contiguous cut, as made by the automatic pipeline."""
     render_edit(src, out, [(start, end)], words, mode=mode, captions=captions, logo=logo,
                 logo_pos=logo_pos, logo_scale=logo_scale, music=music, music_volume=music_volume,
-                src_has_audio=src_has_audio)
+                src_has_audio=src_has_audio, style=style)
 
 
 def build_proxy(src, lo: float, hi: float, out: Path, pct_cb: Callable[[int], None] | None = None) -> None:

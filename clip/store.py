@@ -25,6 +25,8 @@ DEFAULTS = {
     "hashtags": [], "disclosure": "#ad", "min_seconds": 15, "max_seconds": 60,
     "clips_per_video": 8, "frame_mode": "blur",
     "logo_position": "tr", "logo_scale": 0.18, "music_volume": 0.12,
+    "cap_font": "Inter", "cap_size": 84, "cap_color": "#FFFFFF", "cap_highlight": "#FFE500",
+    "cap_style": "outline", "cap_pos": "low", "cap_words": 3, "cap_upper": True, "cap_pop": False,
 }
 CLIP_FIELDS = ("status", "notes", "payout", "post_url", "draft")
 
@@ -49,6 +51,8 @@ def rules_hash(rules: str) -> str:
 def _coerce(key: str, value):
     """Convert a setting to its proper type, or raise ValueError (blank and junk are rejected)."""
     want = type(DEFAULTS[key])
+    if want is bool:
+        return value if isinstance(value, bool) else str(value).strip().lower() in ("1", "true", "yes", "on")
     if want is list:
         return value if isinstance(value, list) else str(value).split()
     if want in (int, float):
