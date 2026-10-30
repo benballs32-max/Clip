@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from . import assets, highlights, render, scenes, transcribe, youtube
+from . import assets, highlights, render, scenes, track, transcribe, youtube
 
 def _mins(sec: float) -> str:
     return f"{int(sec // 60)} min" if sec >= 120 else f"{int(sec)} s"
@@ -35,6 +35,25 @@ def _free_name(out_dir: Path, base: str, start: int) -> tuple[str, int]:
     return f"{base}_{i:02d}", i + 1
 
 
+def follow_track(src, a: float, b: float, dims: tuple[int, int], campaign: dict, progress) -> dict | None:
+    """Camera keyframes for a follow-the-speaker clip, or None to fall back to the blurred fit."""
+    mode = campaign.get("frame_mode", "blur")
+    if mode not in ("follow", "follow45"):
+        return None
+    if not track.available():
+        progress("Face detection isn't installed; using the blurred fit instead.")
+        return None
+    try:
+        tk = track.compute(src, max(a - 0.5, 0), b + 0.5, dims, crop_w=render.follow_geometry(mode, dims)[1])
+    except Exception as e:
+        progress(f"Couldn't follow the speaker ({str(e)[:80]}); using the blurred fit.")
+        return None
+    if tk["seen"] < 0.3:
+        progress(f"Few faces found ({int(tk['seen'] * 100)}% of frames); using the blurred fit for this clip.")
+        return None
+    return tk
+
+
 def caption_text(clip: dict, campaign: dict) -> str:
     disclosure = campaign.get("disclosure", "#ad")
     tags = [t for t in campaign.get("hashtags", []) if t.lower() != disclosure.lower()]
@@ -52,6 +71,8 @@ def process_source(src: Path, rel: str, out_dir: Path, campaign: dict,
     meta = assets.probe(src)
     duration = float(meta.get("format", {}).get("duration") or 0)
     src_audio = any(s.get("codec_type") == "audio" for s in meta.get("streams", []))
+    vstream = next((s for s in meta.get("streams", []) if s.get("codec_type") == "video"), {})
+    dims = (vstream.get("width") or 1920, vstream.get("height") or 1080)
     min_s, max_s = campaign.get("min_seconds", 15), campaign.get("max_seconds", 60)
 
     segments = []
@@ -80,8 +101,9 @@ def process_source(src: Path, rel: str, out_dir: Path, campaign: dict,
         progress(f"Rendering clip {i}/{len(picks)}…", round((i - 1) / len(picks) * 100))
         t0 = time.time()
         out = out_dir / f"{name}.mp4"
+        tk = None if visual else follow_track(src, p["start"], p["end"], dims, campaign, progress)
         render.render_clip(
-            src, out, p["start"], p["end"], words, mode=campaign.get("frame_mode", "blur"),
+            src, out, p["start"], p["end"], words, mode=campaign.get("frame_mode", "blur"), track=tk, src_dims=dims,
             logo=logo, logo_pos=campaign.get("logo_position", "tr"),
             logo_scale=campaign.get("logo_scale", 0.18), music=music,
             music_volume=campaign.get("music_volume", 0.12) if not visual else max(campaign.get("music_volume", 0.12), 0.6),
@@ -113,11 +135,12 @@ def process_youtube(url: str, vid: str, title: str, work: Path, out_dir: Path, c
     picks = [p for p in picks if not _overlaps(p, existing)]
     progress(f"{len(picks)} new moments to render.")
     words = [w for s in segments for w in s["words"]]
-    results, spec, nxt = [], None, 1
+    results, spec, nxt, tk = [], None, 1, None
     for i, p in enumerate(picks, 1):
         name, nxt = _free_name(out_dir, f"yt_{vid}", nxt)
         out = out_dir / f"{name}.mp4"
         t0 = time.time()
+        dims = (spec["w"], spec["h"]) if spec else None
         kw = dict(mode=campaign.get("frame_mode", "blur"), logo=logo,
                   logo_pos=campaign.get("logo_position", "tr"),
                   logo_scale=campaign.get("logo_scale", 0.18), music=music,
@@ -127,7 +150,9 @@ def process_youtube(url: str, vid: str, title: str, work: Path, out_dir: Path, c
         try:  # fast path: ffmpeg reads only this range straight from YouTube, one encode
             if spec is None or time.time() - spec["fetched"] > 3000:
                 spec = youtube.stream_spec(url)
-            render.render_clip(spec, out, p["start"], p["end"], words, **kw)
+            dims = (spec["w"], spec["h"])
+            tk = follow_track(spec, p["start"], p["end"], dims, campaign, progress)
+            render.render_clip(spec, out, p["start"], p["end"], words, track=tk, src_dims=dims, **kw)
         except Exception as e:
             progress(f"Streaming failed ({str(e)[:80]}). Downloading the section instead…")
             spec = None
@@ -135,7 +160,9 @@ def process_youtube(url: str, vid: str, title: str, work: Path, out_dir: Path, c
             section = youtube.download_section(url, sec_start, p["end"] + 1.0, work / f"{name}.src.mp4")
             shifted = [{**w, "start": w["start"] - sec_start, "end": w["end"] - sec_start} for w in words
                        if sec_start - 0.1 <= w["start"] <= p["end"] + 1.0]
-            render.render_clip(section, out, p["start"] - sec_start, p["end"] - sec_start, shifted, **kw)
+            tk = tk and {"keys": [[t - sec_start, c] for t, c in tk["keys"]]}
+            render.render_clip(section, out, p["start"] - sec_start, p["end"] - sec_start, shifted,
+                               track=tk, src_dims=dims, **kw)
             section.unlink(missing_ok=True)
         progress(f"Clip {i} done in {time.time() - t0:.0f}s: {p['title']}")
         text = caption_text(p, campaign)

@@ -168,7 +168,7 @@ function renderCampaign(c) {
         ${field("Min seconds", `<input name="min_seconds" type="number" value="${c.min_seconds}">`)}
         ${field("Max seconds", `<input name="max_seconds" type="number" value="${c.max_seconds}">`)}
         ${field("Max clips per video", `<input name="clips_per_video" type="number" value="${c.clips_per_video}">`)}
-        ${field("Framing", `<select name="frame_mode">${opts([["blur", "Fit + blurred background"], ["fill", "Fill (center crop)"]], c.frame_mode)}</select>`, "full")}</div></div>
+        ${field("Framing", `<select name="frame_mode">${opts([["blur", "Fit + blurred background"], ["fill", "Fill (center crop)"], ["follow", "Follow the speaker (full height)"], ["follow45", "Follow the speaker (4:5 over blur)"]], c.frame_mode)}</select>`, "full")}</div></div>
       <div class="group"><h3>Subtitles</h3><div class="capstyle"><div>
         <div class="presets" id="capPresets">${Object.keys(CAP_PRESETS).map(n => `<button type="button" class="btn sm" data-p="${n}">${n}</button>`).join("")}</div>
         <div class="grid" style="margin-top:12px">

@@ -52,6 +52,7 @@ def stream_spec(url: str) -> dict:
     audio = next((f for f in fmts if f is not video and f.get("acodec") not in (None, "none")), None)
     headers = {**d.get("http_headers", {}), **video.get("http_headers", {})}
     return {"video": video["url"], "audio": audio["url"] if audio else None,
+            "w": video.get("width") or 1920, "h": video.get("height") or 1080,
             "headers": "".join(f"{k}: {v}\r\n" for k, v in headers.items()), "fetched": time.time()}
 
 

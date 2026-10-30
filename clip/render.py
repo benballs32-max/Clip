@@ -203,11 +203,40 @@ def _run(cmd: list[str], cwd: Path, total: float, pct_cb: Callable[[int], None] 
         raise RuntimeError("ffmpeg failed: " + " | ".join(t for t in tail if t)[:400])
 
 
+def follow_geometry(mode: str, dims: tuple[int, int]) -> tuple[int, float]:
+    """Crop window width in source pixels for a follow mode, and as a fraction of the frame width."""
+    ratio = 9 / 16 if mode == "follow" else 4 / 5
+    cw = min(int(round(dims[1] * ratio / 2)) * 2, dims[0])
+    return cw, cw / dims[0]
+
+
+def _x_expr(keys: list[list[float]], segments, W0: int, cw: int) -> str:
+    """ffmpeg expression for the crop's left edge over OUTPUT time, from source-time camera keyframes."""
+    from .track import cx_at
+    pts, off = [], 0.0
+    for a, b in segments:
+        pts.append((off, cx_at(keys, a)))
+        pts += [(off + t - a, c) for t, c in keys if a < t < b]
+        pts.append((off + b - a, cx_at(keys, b)))
+        off += b - a
+    if len(pts) > 160:  # keep the expression a sane size
+        step = len(pts) / 160
+        pts = [pts[int(i * step)] for i in range(160)] + [pts[-1]]
+    xs = [(t, min(max(c * W0 - cw / 2, 0.0), W0 - cw)) for t, c in pts]
+    expr = f"{xs[-1][1]:.1f}"
+    for i in range(len(xs) - 2, -1, -1):
+        (t0, x0), (t1, x1) = xs[i], xs[i + 1]
+        if t1 - t0 < 1e-3:  # a step (camera cut or a segment join): the later piece takes over
+            continue
+        expr = f"if(lt(t,{t1:.3f}),{x0:.1f}+({x1 - x0:.1f})*(t-{t0:.3f})/{t1 - t0:.3f},{expr})"
+    return expr
+
+
 def render_edit(src, out: Path, segments, words: list[dict], *, overlays=(), mode: str = "blur",
                 captions: bool = True, logo: Path | None = None, logo_pos: str = "tr",
                 logo_scale: float = 0.18, music: Path | None = None, music_volume: float = 0.12,
                 src_has_audio: bool = True, pct_cb: Callable[[int], None] | None = None,
-                style: dict | None = None) -> None:
+                style: dict | None = None, track: dict | None = None, src_dims: tuple[int, int] | None = None) -> None:
     """Render ordered source segments [(start, end), ...] to a 1080x1920 clip.
     mode: 'fill' center-crops to 9:16; 'blur' fits the video over a blurred copy."""
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -247,7 +276,19 @@ def render_edit(src, out: Path, segments, words: list[dict], *, overlays=(), mod
                 parts += f"[v{k}]"
         chain.append(f"{parts}concat=n={len(segments)}:v=1:a={1 if src_has_audio else 0}[vs]" + ("[as]" if src_has_audio else ""))
 
-    if mode == "fill":
+    follow = mode in ("follow", "follow45") and track and track.get("keys") and src_dims
+    if follow:  # crop a vertical window that follows the speaker
+        W0, H0 = src_dims
+        cw, _ = follow_geometry(mode, src_dims)
+        xe = _x_expr(track["keys"], segments, W0, cw)
+        if mode == "follow":
+            chain.append(f"[vs]crop=w={cw}:h={H0}:x='{xe}':y=0,scale={W}:{H}[v0]")
+        else:  # 4:5 window over a blurred copy: sharper than a full 9:16 crop
+            fg_h = int(round(W * H0 / cw / 2)) * 2
+            chain.append(f"[vs]split[sa][sb];[sa]scale=270:480:force_original_aspect_ratio=increase,"
+                         f"crop=270:480,boxblur=8:2,scale={W}:{H}[bg];[sb]crop=w={cw}:h={H0}:x='{xe}':y=0,"
+                         f"scale={W}:{fg_h}[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v0]")
+    elif mode == "fill":
         chain.append(f"[vs]scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}[v0]")
     else:
         chain.append(f"[vs]split[sa][sb];[sa]scale=270:480:force_original_aspect_ratio=increase,"
@@ -284,11 +325,12 @@ def render_edit(src, out: Path, segments, words: list[dict], *, overlays=(), mod
 def render_clip(src, out: Path, start: float, end: float, words: list[dict], mode: str = "blur",
                 captions: bool = True, logo: Path | None = None, logo_pos: str = "tr",
                 logo_scale: float = 0.18, music: Path | None = None, music_volume: float = 0.12,
-                src_has_audio: bool = True, style: dict | None = None) -> None:
+                src_has_audio: bool = True, style: dict | None = None, track: dict | None = None,
+                src_dims: tuple[int, int] | None = None) -> None:
     """One contiguous cut, as made by the automatic pipeline."""
     render_edit(src, out, [(start, end)], words, mode=mode, captions=captions, logo=logo,
                 logo_pos=logo_pos, logo_scale=logo_scale, music=music, music_volume=music_volume,
-                src_has_audio=src_has_audio, style=style)
+                src_has_audio=src_has_audio, style=style, track=track, src_dims=src_dims)
 
 
 def build_proxy(src, lo: float, hi: float, out: Path, pct_cb: Callable[[int], None] | None = None) -> None:

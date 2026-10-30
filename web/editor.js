@@ -115,8 +115,18 @@ function mountEditor(c, x, clip, info, base) {
     if (E.dead) return;
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, CW, CH);
     if (pv.readyState >= 2 && pv.videoWidth) {
-      const vw = pv.videoWidth, vh = pv.videoHeight;
-      if (S.frame_mode === "fill") { const sc = Math.max(CW / vw, CH / vh); ctx.drawImage(pv, (CW - vw * sc) / 2, (CH - vh * sc) / 2, vw * sc, vh * sc); }
+      const vw = pv.videoWidth, vh = pv.videoHeight, keys = info.track && info.track.keys && info.track.keys.length ? info.track.keys : null;
+      if (keys && (S.frame_mode === "follow" || S.frame_mode === "follow45")) {  // crop a window that follows the speaker
+        const ts = srcAt(E.t).src; let cx = keys[keys.length - 1][1];
+        if (ts <= keys[0][0]) cx = keys[0][1]; else for (let n = 0; n < keys.length - 1; n++) if (ts < keys[n + 1][0]) { const [t0, c0] = keys[n], [t1, c1] = keys[n + 1]; cx = t1 - t0 < 1e-6 ? c0 : c0 + (c1 - c0) * (ts - t0) / (t1 - t0); break; }
+        const sw = vh * (S.frame_mode === "follow" ? 9 / 16 : 4 / 5), sx = Math.min(Math.max(cx * vw - sw / 2, 0), vw - sw);
+        if (S.frame_mode === "follow") ctx.drawImage(pv, sx, 0, sw, vh, 0, 0, CW, CH);
+        else {
+          const sc = Math.max(36 / vw, 64 / vh); tctx.drawImage(pv, (36 - vw * sc) / 2, (64 - vh * sc) / 2, vw * sc, vh * sc);
+          ctx.imageSmoothingEnabled = true; ctx.drawImage(tiny, 0, 0, CW, CH);
+          const h = CW * vh / sw; ctx.drawImage(pv, sx, 0, sw, vh, 0, (CH - h) / 2, CW, h);
+        }
+      } else if (S.frame_mode === "fill") { const sc = Math.max(CW / vw, CH / vh); ctx.drawImage(pv, (CW - vw * sc) / 2, (CH - vh * sc) / 2, vw * sc, vh * sc); }
       else {
         const sc = Math.max(36 / vw, 64 / vh); tctx.drawImage(pv, (36 - vw * sc) / 2, (64 - vh * sc) / 2, vw * sc, vh * sc);
         ctx.imageSmoothingEnabled = true; ctx.drawImage(tiny, 0, 0, CW, CH);

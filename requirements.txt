@@ -8,3 +8,5 @@ python-docx>=1.1
 yt-dlp[default]>=2026.1
 deno>=2
 fonttools>=4.40
+opencv-python-headless>=4.8
+numpy>=1.24

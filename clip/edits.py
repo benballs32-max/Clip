@@ -12,7 +12,7 @@ import re
 import time
 from pathlib import Path
 
-from . import assets, config, highlights, llm, render, store, transcribe, youtube
+from . import assets, config, highlights, llm, render, store, track, transcribe, youtube
 
 PAD = 20.0               # seconds of source kept either side of a clip for the editor to reach into
 MAX_TOTAL = 180.0
@@ -101,9 +101,45 @@ def editor_info(cid: str, item: dict, clip: dict, campaign: dict) -> dict:
                                                         "overlays": [], "captions": True, "tags": []},
         "clip": {"file": clip["file"], "title": clip["title"], "caption": clip.get("caption", ""),
                  "start": clip["start"], "end": clip["end"]},
+        "track": (lambda t: {"keys": t["keys"], "seen": t.get("seen")} if t else None)(ensure_track(cid, item, clip, campaign)),
         "settings": {k: campaign[k] for k in ("frame_mode", "logo_position", "logo_scale", "music_volume",
                                               *render.CAP_DEFAULTS)},
     }
+
+
+
+# ---------------------------------------------------------------- speaker-follow framing
+
+def _dims(src) -> tuple[int, int]:
+    if isinstance(src, dict):
+        return int(src["w"]), int(src["h"])
+    vs = next((x for x in assets.probe(src).get("streams", []) if x.get("codec_type") == "video"), {})
+    return int(vs.get("width") or 1920), int(vs.get("height") or 1080)
+
+
+def ensure_track(cid: str, item: dict, clip: dict, campaign: dict) -> dict | None:
+    """Camera path for the editor's whole range, computed once from the small preview copy."""
+    mode = campaign["frame_mode"]
+    if mode not in ("follow", "follow45") or not track.available():
+        return None
+    lo, hi = editor_range(item, clip)
+    d = proxy_dir(cid, clip)
+    cache = d / "track.json"
+    try:
+        t = json.loads(cache.read_text())
+        if t.get("mode") == mode and abs(t["lo"] - lo) < 0.01 and abs(t["hi"] - hi) < 0.01:
+            return t
+    except (OSError, ValueError, KeyError):
+        pass
+    if not proxy_ready(cid, clip, lo, hi):
+        return None
+    pv = d / "proxy.mp4"
+    dims = _dims(pv)
+    t = track.compute(pv, 0.0, hi - lo, dims, crop_w=render.follow_geometry(mode, dims)[1])
+    t["keys"] = [[k + lo, c] for k, c in t["keys"]]
+    t.update(mode=mode, lo=lo, hi=hi)
+    cache.write_text(json.dumps(t))
+    return t
 
 
 # ---------------------------------------------------------------- validation
@@ -322,7 +358,18 @@ def export_edl(cid: str, xid: str, file: str, edl: dict, say=None, pct_cb=None,
     out = store.cdir(cid) / "clips" / f"{name}.mp4"
     segs = [(s["start"], s["end"]) for s in edl["segments"]]
     say(f"Rendering {len(segs)} segment{'s' if len(segs) > 1 else ''}, {total_len(edl):.0f}s…")
-    render.render_edit(src, out, segs, words, overlays=edl["overlays"], captions=edl["captions"],
+    tk, dims = None, None
+    if campaign["frame_mode"] in ("follow", "follow45") and track.available():
+        dims = _dims(src)
+        tk = ensure_track(cid, item, clip, campaign)
+        if tk is None:  # no preview copy yet: read the needed part of the source directly
+            say("Finding the speaker…")
+            a, b = min(x[0] for x in segs), max(x[1] for x in segs)
+            tk = track.compute(src, a, b, dims, crop_w=render.follow_geometry(campaign["frame_mode"], dims)[1])
+        if tk["seen"] is not None and tk["seen"] < 0.3:
+            say("Few faces found, so the blurred fit is used instead.")
+            tk = None
+    render.render_edit(src, out, segs, words, overlays=edl["overlays"], captions=edl["captions"], track=tk, src_dims=dims,
                        mode=campaign["frame_mode"], logo=logo, logo_pos=campaign["logo_position"],
                        logo_scale=campaign["logo_scale"], music=music, music_volume=campaign["music_volume"],
                        src_has_audio=has_audio, pct_cb=pct_cb, style=style_for(cid, campaign))
