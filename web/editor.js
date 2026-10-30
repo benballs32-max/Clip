@@ -100,7 +100,7 @@ function mountEditor(c, x, clip, info, base) {
   const words = () => {  // output-time words, as the export maps them
     const key = JSON.stringify(segs()); if (E._wk === key) return E._w;
     const out = []; let off = 0;
-    for (const s of segs()) { for (const w of info.words) if (w.start >= s.start - 0.05 && w.end <= s.end + 0.3) out.push({ word: w.word, start: Math.max(w.start - s.start, 0) + off, end: Math.min(w.end - s.start + off, off + s.end - s.start) }); off += s.end - s.start; }
+    for (const s of segs()) { for (const w of info.words) if (s.start - 0.05 <= (w.start + w.end) / 2 && (w.start + w.end) / 2 <= s.end) out.push({ word: w.word, start: Math.max(w.start - s.start, 0) + off, end: Math.min(w.end - s.start + off, off + s.end - s.start) }); off += s.end - s.start; }
     E._wk = key; return E._w = out;
   };
 

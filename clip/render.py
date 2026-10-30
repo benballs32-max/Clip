@@ -99,7 +99,7 @@ def map_words(words: list[dict], segments) -> list[dict]:
     out, off = [], 0.0
     for a, b in segments:
         for w in words:
-            if w["start"] >= a - 0.05 and w["end"] <= b + 0.3:
+            if a - 0.05 <= (w["start"] + w["end"]) / 2 <= b:  # by midpoint: the next sentence's first word never leaks in
                 s = max(w["start"] - a, 0.0) + off
                 out.append({"word": w["word"], "start": s, "end": min(w["end"] - a + off, off + (b - a))})
         off += b - a

@@ -30,6 +30,9 @@ const PATHS = {
   music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>', link: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   empty: '<rect width="18" height="18" x="3" y="3" rx="2" stroke-dasharray="3 3"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>',
+  alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
   scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>',
 };
 const I = (n, s = 16) => `<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${PATHS[n]}</svg>`;
@@ -166,6 +169,8 @@ function renderCampaign(c) {
       <div class="savebar"><button class="btn primary" id="save" disabled>Save changes</button><span class="state" id="saved">All changes saved</span></div>
     </form>
 
+    ${checksCard(c)}
+
     <section class="card">
       <header><h2>Logo, music and other files</h2></header>
       <p class="hint">A logo is placed on every clip, music plays under the audio. A video dropped here becomes its own content item.</p>
@@ -185,6 +190,7 @@ function renderCampaign(c) {
     <div class="danger-zone"><button id="del" class="btn danger">${I("trash", 15)}Delete campaign</button></div>
   </div>`;
 
+  bindChecks(c);
   const form = $("#f"), save = $("#save"), state = $("#saved");
   const dirty = () => { save.disabled = false; state.textContent = "Unsaved changes"; state.className = "state"; };
   form.addEventListener("input", dirty); form.addEventListener("change", dirty);
@@ -230,6 +236,39 @@ function renderCampaign(c) {
     await api(`/api/campaigns/${c.id}/assets?path=${encodeURIComponent(b.dataset.path)}`, { method: "DELETE" });
     render();
   });
+}
+
+
+// ---------- campaign page: the pre-submission checklist ----------
+function checksCard(c) {
+  const items = c.checks.items, kinds = [["caption", "Caption"], ["visual", "Video frames"], ["speech", "Speech"], ["manual", "Reminder"]];
+  const row = (i, n) => `<div class="ckrow" data-n="${n}"><input type="checkbox" class="ckon" ${i.enabled ? "checked" : ""} aria-label="Enabled">
+      <input class="cktext" value="${esc(i.text)}"><select class="ckkind">${kinds.map(([v, t]) => `<option value="${v}" ${(i.kind === v || (i.kind === "length" && v === "speech")) ? "selected" : ""}>${t}</option>`).join("")}</select>
+      <button class="icon-btn ckrm" title="Remove">${I("x", 15)}</button></div>`;
+  return `<section class="card" id="checks">
+    <header><h2>Pre-submission checks</h2><div class="row"><button class="btn sm" id="ckgen">${I("shield", 14)}${items.length ? "Rebuild from brief" : "Build from brief"}</button><button class="btn sm" id="ckadd">${I("plus", 13)}Add check</button></div></header>
+    <p class="hint">Claude judges every clip against this list using its caption, transcript and frames from the video. Reminders can't be seen in a clip, so they show as a checklist before you post.
+      Always checked: a clean start and end, caption quality, readable subtitles, no other brands, length and required tags.</p>
+    ${c.checks.stale ? '<div class="note" style="display:block;margin:0 0 12px">The rules changed since this checklist was built. Use “Rebuild from brief” to refresh it (your edits will be replaced).</div>' : ""}
+    ${items.map(row).join("") || '<p class="hint" style="margin:0">No checks yet. Add the brief above, then build the checklist from it.</p>'}
+  </section>`;
+}
+function bindChecks(c) {
+  const save = async items => {
+    try { c.checks = await api(`/api/campaigns/${c.id}/checks`, { method: "PUT", body: { items, hash: c.checks.hash } }); toast("Checks saved"); }
+    catch (e) { toast(e.message, "bad"); }
+  };
+  const read = () => $$(".ckrow").map(r => ({ id: c.checks.items[+r.dataset.n]?.id || "", text: $(".cktext", r).value, kind: $(".ckkind", r).value, enabled: $(".ckon", r).checked }));
+  $$(".ckrow").forEach(r => {
+    $(".ckon", r).onchange = () => save(read()); $(".ckkind", r).onchange = () => save(read()); $(".cktext", r).onchange = () => save(read());
+    $(".ckrm", r).onclick = async () => { const n = +r.dataset.n; await save(read().filter((_, i) => i !== n)); render(); };
+  });
+  $("#ckadd").onclick = async () => { await save([...read(), { id: "", text: "New check", kind: "speech", enabled: true }]); render(); };
+  $("#ckgen").onclick = async () => {
+    const b = $("#ckgen"); b.disabled = true; b.textContent = "Reading the brief…";
+    try { await api(`/api/campaigns/${c.id}/checks/generate`, { method: "POST" }); toast("Checklist built"); render(); }
+    catch (e) { toast(e.message, "bad"); b.disabled = false; b.textContent = "Build from brief"; }
+  };
 }
 
 function assetTable(c) {
@@ -285,10 +324,10 @@ function renderContent(c, x) {
     <div class="tiles"><div class="tile"><span>Clips</span><b>${clips.length}</b></div><div class="tile"><span>Approved</span><b>${count("approved")}</b></div>
       <div class="tile"><span>Posted</span><b>${count("posted")}</b></div><div class="tile money"><span>Earned</span><b>${money(earned)}</b></div></div>
     <section class="card">${source}</section>
-    <div class="bar-head"><h2>Clips</h2><div class="tabs" id="tabs">${["all", ...STATUSES].map(s => `<button class="tab ${clipFilter === s ? "on" : ""}" data-f="${s}">${s[0].toUpperCase() + s.slice(1)}<em></em></button>`).join("")}</div></div>
+    <div class="bar-head"><h2>Clips</h2><div class="row" style="gap:10px">${clips.length ? `<button class="btn sm" id="qaall" title="Check every clip against the campaign's rules">${I("shield", 14)}Check all</button>` : ""}<div class="tabs" id="tabs">${["all", ...STATUSES].map(s => `<button class="tab ${clipFilter === s ? "on" : ""}" data-f="${s}">${s[0].toUpperCase() + s.slice(1)}<em></em></button>`).join("")}</div></div></div>
     <div class="clips" id="clips">${clips.map(clipCard(c.id)).join("") || `<div class="empty-state"><b>No clips yet</b>${x.kind ? "Press Generate to create them." : "Add a source above first."}</div>`}</div>
     <div class="danger-zone" style="margin-top:32px"><button id="delx" class="btn danger">${I("trash", 15)}Delete this content</button></div>
-    <div class="selbar" id="selbar" hidden><span id="selcount"></span><button class="btn primary sm" id="editsel">${I("scissors", 14)}Edit</button><button class="btn ghost sm" id="clearsel">Clear</button></div>
+    <div class="selbar" id="selbar" hidden><span id="selcount"></span><button class="btn primary sm" id="editsel">${I("scissors", 14)}Edit</button><button class="btn sm" id="checksel">${I("shield", 14)}Check</button><button class="btn ghost sm" id="clearsel">Clear</button></div>
     </div>
     <aside class="activity card"><header><h2>Activity</h2><span id="pill" class="pill"></span></header>
       <div class="prog" id="barwrap" hidden><div id="bar"></div></div>
@@ -340,6 +379,14 @@ function renderContent(c, x) {
   };
   $$(".clip").forEach(el => $(".pick", el).onchange = e => { e.target.checked ? picked.add(el.dataset.file) : picked.delete(el.dataset.file); sync(); });
   $("#clearsel").onclick = () => { picked.clear(); sync(); };
+  const openQA = async (k, chip) => { const rerun = () => runQA(c, x, k, chip).then(q => q && qaDialog(c, x, k, rerun)); k.qa ? qaDialog(c, x, k, rerun) : rerun(); };
+  $$(".clip").forEach(el => { const k = clips.find(z => z.file === el.dataset.file); $(".qachip", el).onclick = e => openQA(k, e.currentTarget); });
+  const checkMany = async files => {
+    try { await api(`/api/campaigns/${c.id}/content/${x.id}/qa-all`, { method: "POST", body: { files } }); busy = { cid: c.id, xid: x.id }; sidebar(); attachJob(c.id, x.id); toast("Checking. Follow it in Activity."); }
+    catch (e) { toast(e.message, "bad"); }
+  };
+  if ($("#qaall")) $("#qaall").onclick = () => checkMany([]);
+  $("#checksel").onclick = () => picked.size === 1 ? openQA(clips.find(z => z.file === [...picked][0]), $(`.clip[data-file="${[...picked][0]}"] .qachip`)) : checkMany([...picked]);
   $("#editsel").onclick = () => picked.size === 1 ? (location.hash = `#/${c.id}/${x.id}/${encodeURIComponent([...picked][0])}`) : batchDialog(c, x, [...picked]);
   applyFilter();
   attachJob(c.id, x.id);
@@ -375,6 +422,43 @@ function applyFilter() {
   cards.forEach(c => c.hidden = clipFilter !== "all" && c.dataset.status !== clipFilter);
 }
 
+
+// ---------- pre-submission checks ----------
+const QA_ICON = { pass: ["check", "ok"], warn: ["alert", "warn"], unsure: ["alert", "warn"], fail: ["x", "bad"] };
+function qaCounts(qa) { const n = s => qa.items.filter(i => s.includes(i.status)).length; return { bad: n(["fail"]), review: n(["warn", "unsure"]), ok: n(["pass"]) }; }
+function qaChip(k) {
+  if (!k.qa) return `<button class="qachip" data-qa>${I("shield", 13)}Check</button>`;
+  const n = qaCounts(k.qa), label = n.bad ? `${n.bad} issue${n.bad > 1 ? "s" : ""}` : n.review ? `${n.review} to review` : "Ready";
+  return `<button class="qachip ${k.qa.verdict}" data-qa title="Open the checks">${I(k.qa.verdict === "pass" ? "check" : k.qa.verdict === "warn" ? "alert" : "x", 13)}${label}</button>`;
+}
+function qaDialog(c, x, k, rerun) {
+  const m = document.createElement("div"); m.className = "modal";
+  const manual = c.checks.items.filter(i => i.enabled && i.kind === "manual");
+  const row = i => `<div class="qa-item ${i.status}"><span class="qa-ico ${QA_ICON[i.status][1]}">${I(QA_ICON[i.status][0], 15)}</span><div><b>${esc(i.label)}</b><p>${esc(i.detail)}</p></div></div>`;
+  const q = k.qa, n = qaCounts(q);
+  const order = ["fail", "warn", "unsure", "pass"], sorted = [...q.items].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status));
+  const attention = sorted.filter(i => i.status !== "pass"), passed = sorted.filter(i => i.status === "pass");
+  m.innerHTML = `<div class="box wide"><h2>Checks for ${esc(k.title)}</h2>
+    <div class="verdict ${q.verdict}">${I(q.verdict === "pass" ? "check" : q.verdict === "warn" ? "alert" : "x", 16)}<span>${q.verdict === "pass" ? "Looks ready to post" : q.verdict === "warn" ? "Worth a look before you post" : "Fix these before you post"}</span></div>
+    ${q.summary ? `<p class="hint" style="margin:10px 0 4px">${esc(q.summary)}</p>` : ""}
+    <div class="qa-list">${attention.map(row).join("") || '<p class="hint">Nothing needs attention.</p>'}</div>
+    <details class="qa-pass"><summary>${n.ok} passed</summary><div class="qa-list">${passed.map(row).join("")}</div></details>
+    ${manual.length ? `<div class="qa-manual"><h3>Before you post</h3>${manual.map(i => `<label class="check"><input type="checkbox"> ${esc(i.text)}</label>`).join("")}</div>` : ""}
+    <div class="row end" style="margin-top:16px"><span class="mute" style="margin-right:auto">${esc(q.tokens || "")} · ${new Date(q.at * 1000).toLocaleString()}</span>
+      <button class="btn" id="qre">${I("shield", 14)}Check again</button><button class="btn primary" id="qclose">Close</button></div></div>`;
+  document.body.appendChild(m);
+  const close = () => m.remove(); m.onclick = e => e.target === m && close(); $("#qclose", m).onclick = close;
+  $("#qre", m).onclick = () => { close(); rerun(); };
+}
+async function runQA(c, x, k, chip) {
+  if (chip) { chip.disabled = true; chip.innerHTML = `${I("shield", 13)}Checking…`; }
+  try {
+    k.qa = await api(`/api/campaigns/${c.id}/content/${x.id}/clips/${encodeURIComponent(k.file)}/qa`, { method: "POST" });
+    if (chip) chip.outerHTML = qaChip(k);
+    return k.qa;
+  } catch (e) { toast(e.message, "bad"); if (chip) { chip.disabled = false; chip.outerHTML = qaChip(k); } }
+}
+
 const clipCard = cid => k => `
   <article class="clip ${k.status}" data-file="${esc(k.file)}" data-status="${k.status}">
     <div class="vid"><video src="/media/${cid}/${encodeURIComponent(k.file)}?v=${Math.round(k.start * 100)}-${Math.round(k.end * 100)}-${Math.round((k.duration || 0) * 10)}" controls preload="metadata"></video>
@@ -383,7 +467,7 @@ const clipCard = cid => k => `
     <div class="cbody">
       <h4>${esc(k.title)}</h4>
       <div class="cmeta"><span>${tc(k.start)}–${tc(k.end)}</span><span>·</span><span>${Math.round(k.duration || k.end - k.start)}s</span>${k.score ? `<span>·</span><span class="score">score ${k.score}</span>` : ""}</div>
-      ${k.tags && k.tags.length ? `<div class="tags">${k.tags.map(t => `<span class="tag t-${t}">${TAGL[t] || t}</span>`).join("")}</div>` : ""}
+      <div class="tags">${(k.tags || []).map(t => `<span class="tag t-${t}">${TAGL[t] || t}</span>`).join("")}${qaChip(k)}</div>
       <div class="cap" title="Click to expand"><p>${esc(k.caption)}</p></div>
       <div class="seg">${STATUSES.map(s => `<button data-s="${s}" class="${k.status === s ? "on" : ""}">${s[0].toUpperCase() + s.slice(1)}</button>`).join("")}</div>
       <div class="foot"><label class="pay" title="Amount paid"><span>$</span><input type="number" step="0.01" placeholder="paid" value="${k.payout || ""}" aria-label="Amount paid"></label>

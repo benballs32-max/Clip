@@ -294,3 +294,28 @@ input[type=range]:focus{box-shadow:none}
 .blk .h.l{left:-5px}.blk .h.r{right:-5px}
 .playhead{position:absolute;top:0;bottom:0;width:2px;background:#fff;pointer-events:none;box-shadow:0 0 0 1px rgba(0,0,0,.45);z-index:3}
 @media(max-width:1100px){.ed-grid{grid-template-columns:1fr}.ed-stage{position:static}}
+
+/* ---------- pre-submission checks ---------- */
+.qachip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 9px;border-radius:99px;border:1px solid var(--line-2);background:transparent;color:var(--text-2);font-size:11.5px;cursor:pointer;transition:background .15s,border-color .15s,color .15s}
+.qachip:hover{background:var(--hover);color:var(--text)}
+.qachip.pass{color:var(--ok);border-color:rgba(76,195,138,.4);background:rgba(76,195,138,.08)}
+.qachip.warn{color:var(--warn);border-color:rgba(226,163,54,.45);background:rgba(226,163,54,.08)}
+.qachip.fail{color:var(--bad);border-color:rgba(239,107,107,.45);background:rgba(239,107,107,.08)}
+.qachip:disabled{opacity:.6;cursor:wait}
+.modal .box.wide{width:min(640px,94vw);max-height:90vh;overflow-y:auto}
+.verdict{display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:9px;font-weight:600;margin-top:10px}
+.verdict.pass{background:rgba(76,195,138,.1);color:var(--ok)}.verdict.warn{background:rgba(226,163,54,.1);color:var(--warn)}.verdict.fail{background:rgba(239,107,107,.1);color:var(--bad)}
+.qa-list{margin-top:6px}
+.qa-item{display:flex;gap:10px;padding:9px 0;border-top:1px solid var(--line)}
+.qa-item:first-child{border-top:0}
+.qa-item b{font-size:13px;font-weight:600;display:block}
+.qa-item p{margin:2px 0 0;color:var(--text-2);font-size:12.5px}
+.qa-ico{flex:none;margin-top:1px}.qa-ico.ok{color:var(--ok)}.qa-ico.warn{color:var(--warn)}.qa-ico.bad{color:var(--bad)}
+.qa-pass{margin-top:6px;border-top:1px solid var(--line);padding-top:8px}
+.qa-pass summary{cursor:pointer;color:var(--mute);font-size:12.5px}
+.qa-manual{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.qa-manual h3{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.qa-manual .check{align-items:flex-start;line-height:1.4}
+.ckrow{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.ckrow .cktext{flex:1}
+.ckrow .ckkind{width:130px;flex:none}

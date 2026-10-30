@@ -174,9 +174,18 @@ def run_qa(cid: str, xid: str, file: str) -> dict:
     asks = [(i, k, t) for i, k, t in STD] + [(c["id"], c["kind"], c["text"]) for c in brief_items]
     label = {i: t for i, _, t in asks}
     kind = {i: k for i, k, _ in asks}
+    tags = (clip.get("edit") or {}).get("tags") or clip.get("tags") or []
+    style = ""
+    if "loop" in tags:
+        style = ("EDIT STYLE: seamless loop. By design the clip opens with the final words of its last sentence and ends on "
+                 "the lead-in, so a replay flows back into the opening. Do not fail the start or end checks for that; "
+                 "judge instead whether it plays smoothly and the words are unaltered.\n\n")
+    elif "hook" in tags:
+        style = ("EDIT STYLE: punchline first. By design the clip opens with a key line that is repeated later in the clip. "
+                 "Do not penalise that repetition; judge whether the opening line is a strong, complete, verbatim sentence.\n\n")
     prompt = (
         "You are a strict but fair reviewer checking a finished short-form clip before it is submitted to a paid "
-        f"clipping campaign. Platform: {campaign.get('platform')}.\n\n"
+        f"clipping campaign. Platform: {campaign.get('platform')}.\n\n" + style +
         f"Caption (as it will be posted):\n{caption or '(empty)'}\n\n"
         f"What is said (output time):\n{_transcript(cid, item, clip)}\n\n"
         "The frames below come from the finished video, burned-in subtitles included. Judge EVERY check by its id:\n"
