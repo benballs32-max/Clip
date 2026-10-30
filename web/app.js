@@ -13,6 +13,7 @@ const dur = t => t >= 3600 ? `${Math.floor(t / 3600)}h ${Math.round(t % 3600 / 6
 const money = n => "$" + (+n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const ROLES = ["logo", "music", "image", "brief", "ignore"];
 const STATUSES = ["new", "approved", "rejected", "posted"];
+const TAGL = { hook: "Punchline first", keyword: "Keyword", loop: "Loop", edited: "Edited" };
 
 // ---------- icons (stroke, 24px grid) ----------
 const PATHS = {
@@ -29,6 +30,7 @@ const PATHS = {
   music: '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>', link: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
   empty: '<rect width="18" height="18" x="3" y="3" rx="2" stroke-dasharray="3 3"/>',
+  scissors: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>',
 };
 const I = (n, s = 16) => `<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${PATHS[n]}</svg>`;
 const KIND = { youtube: "youtube", video: "film", image: "image", audio: "music", doc: "file", other: "file" };
@@ -54,8 +56,9 @@ window.addEventListener("hashchange", render);
 
 async function render() {
   [data, busy] = await Promise.all([api("/api/campaigns"), api("/api/running").catch(() => ({}))]);
-  const [, cid, xid] = location.hash.split("/");
-  route = { cid, xid };
+  const [, cid, xid, file] = location.hash.split("/");
+  route = { cid, xid, file };
+  window.editorCleanup && window.editorCleanup();
   if (cid) { expanded.add(cid); saveExpanded(); }
   sidebar();
   const c = data.find(c => c.id === cid);
@@ -64,6 +67,7 @@ async function render() {
   const x = xid && c.content.find(x => x.id === xid);
   if (xid && !x) return go(cid);
   $("#main").scrollTop = 0;
+  if (x && file) return renderEditor(c, x, decodeURIComponent(file));
   x ? renderContent(c, x) : renderCampaign(c);
 }
 
@@ -252,7 +256,10 @@ async function analyze(cid) {
 }
 
 // ---------- content page: one video, its clips, its activity ----------
+let picked = new Set();   // clip files ticked for editing
+
 function renderContent(c, x) {
+  picked = new Set();
   const clips = x.clips;
   const count = s => clips.filter(k => k.status === s).length;
   const earned = clips.reduce((a, k) => a + (+k.payout || 0), 0);
@@ -281,6 +288,7 @@ function renderContent(c, x) {
     <div class="bar-head"><h2>Clips</h2><div class="tabs" id="tabs">${["all", ...STATUSES].map(s => `<button class="tab ${clipFilter === s ? "on" : ""}" data-f="${s}">${s[0].toUpperCase() + s.slice(1)}<em></em></button>`).join("")}</div></div>
     <div class="clips" id="clips">${clips.map(clipCard(c.id)).join("") || `<div class="empty-state"><b>No clips yet</b>${x.kind ? "Press Generate to create them." : "Add a source above first."}</div>`}</div>
     <div class="danger-zone" style="margin-top:32px"><button id="delx" class="btn danger">${I("trash", 15)}Delete this content</button></div>
+    <div class="selbar" id="selbar" hidden><span id="selcount"></span><button class="btn primary sm" id="editsel">${I("scissors", 14)}Edit</button><button class="btn ghost sm" id="clearsel">Clear</button></div>
     </div>
     <aside class="activity card"><header><h2>Activity</h2><span id="pill" class="pill"></span></header>
       <div class="prog" id="barwrap" hidden><div id="bar"></div></div>
@@ -325,8 +333,37 @@ function renderContent(c, x) {
     $(".cp", el).onclick = copy;
     $(".cap", el).onclick = e => e.currentTarget.classList.toggle("open");
   });
+  const sync = () => {
+    $$(".clip").forEach(el => { const on = picked.has(el.dataset.file); el.classList.toggle("picked", on); $(".pick", el).checked = on; });
+    $("#selbar").hidden = !picked.size; $("#selcount").textContent = `${picked.size} selected`;
+    $("#editsel").lastChild.textContent = picked.size > 1 ? "Edit together" : "Edit";
+  };
+  $$(".clip").forEach(el => $(".pick", el).onchange = e => { e.target.checked ? picked.add(el.dataset.file) : picked.delete(el.dataset.file); sync(); });
+  $("#clearsel").onclick = () => { picked.clear(); sync(); };
+  $("#editsel").onclick = () => picked.size === 1 ? (location.hash = `#/${c.id}/${x.id}/${encodeURIComponent([...picked][0])}`) : batchDialog(c, x, [...picked]);
   applyFilter();
   attachJob(c.id, x.id);
+}
+
+function batchDialog(c, x, files) {
+  const m = document.createElement("div"); m.className = "modal";
+  m.innerHTML = `<div class="box"><h2>Edit ${files.length} clips together</h2>
+    <p class="hint">Each clip becomes a new edited version next to the original. Claude picks the lines and keywords; the words are never changed, only the order.</p>
+    <div class="field" style="margin-bottom:12px"><span>Opening</span><div class="seg wide" id="bopen">${[["none", "Normal"], ["hook", "Punchline first"], ["loop", "Seamless loop"]].map(([v, t], i) => `<button data-v="${v}" class="${i === 1 ? "on" : ""}">${t}</button>`).join("")}</div></div>
+    <label class="check"><input type="checkbox" id="bkw" checked> Keyword on screen</label>
+    <div class="note" id="bmsg"></div>
+    <div class="row end" style="margin-top:16px"><button class="btn" id="bcancel">Cancel</button><button class="btn primary" id="bgo">Create ${files.length} edited clips</button></div></div>`;
+  document.body.appendChild(m);
+  let opening = "hook";
+  $$("#bopen button", m).forEach(b => b.onclick = () => { opening = b.dataset.v; $$("#bopen button", m).forEach(o => o.classList.toggle("on", o === b)); });
+  const close = () => m.remove();
+  m.onclick = e => e.target === m && close(); $("#bcancel", m).onclick = close;
+  $("#bgo", m).onclick = async () => {
+    const modes = [opening !== "none" ? opening : null, $("#bkw", m).checked ? "keyword" : null].filter(Boolean);
+    if (!modes.length) return void ($("#bmsg", m).textContent = "Pick an opening style or Keyword first.");
+    try { await api(`/api/campaigns/${c.id}/content/${x.id}/batch-edit`, { method: "POST", body: { files, modes } }); close(); picked.clear(); busy = { cid: c.id, xid: x.id }; sidebar(); attachJob(c.id, x.id); toast("Editing started. Follow it in Activity."); }
+    catch (e) { $("#bmsg", m).textContent = e.message; }
+  };
 }
 
 function applyFilter() {
@@ -340,11 +377,13 @@ function applyFilter() {
 
 const clipCard = cid => k => `
   <article class="clip ${k.status}" data-file="${esc(k.file)}" data-status="${k.status}">
-    <div class="vid"><video src="/media/${cid}/${encodeURIComponent(k.file)}?v=${Math.round(k.start * 100)}-${Math.round(k.end * 100)}" controls preload="metadata"></video>
-      <span class="badge">#${k.file.match(/_(\d+)\.mp4$/)?.[1] ?? "?"}</span></div>
+    <div class="vid"><video src="/media/${cid}/${encodeURIComponent(k.file)}?v=${Math.round(k.start * 100)}-${Math.round(k.end * 100)}-${Math.round((k.duration || 0) * 10)}" controls preload="metadata"></video>
+      <span class="badge">#${k.file.match(/_(\d+)(?:_e(\d+))?\.mp4$/)?.slice(1).filter(Boolean).join(" · edit ") ?? "?"}</span>
+      <label class="sel" title="Select to edit"><input type="checkbox" class="pick" aria-label="Select clip"><span>${I("scissors", 13)}</span></label></div>
     <div class="cbody">
       <h4>${esc(k.title)}</h4>
-      <div class="cmeta"><span>${tc(k.start)}–${tc(k.end)}</span><span>·</span><span>${Math.round(k.end - k.start)}s</span>${k.score ? `<span>·</span><span class="score">score ${k.score}</span>` : ""}</div>
+      <div class="cmeta"><span>${tc(k.start)}–${tc(k.end)}</span><span>·</span><span>${Math.round(k.duration || k.end - k.start)}s</span>${k.score ? `<span>·</span><span class="score">score ${k.score}</span>` : ""}</div>
+      ${k.tags && k.tags.length ? `<div class="tags">${k.tags.map(t => `<span class="tag t-${t}">${TAGL[t] || t}</span>`).join("")}</div>` : ""}
       <div class="cap" title="Click to expand"><p>${esc(k.caption)}</p></div>
       <div class="seg">${STATUSES.map(s => `<button data-s="${s}" class="${k.status === s ? "on" : ""}">${s[0].toUpperCase() + s.slice(1)}</button>`).join("")}</div>
       <div class="foot"><label class="pay" title="Amount paid"><span>$</span><input type="number" step="0.01" placeholder="paid" value="${k.payout || ""}" aria-label="Amount paid"></label>

@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import assets, briefs, config, store, youtube
+from . import assets, briefs, config, edits, store, youtube
 from .pipeline import process_source, process_youtube
 
 app = FastAPI(title="Clip")
@@ -260,17 +260,36 @@ async def content_file(cid: str, xid: str, file: UploadFile):
     return store.update_content(cid, xid, fields)
 
 
-# ---------------- generation ----------------
+# ---------------- jobs (one at a time: the server has two cores) ----------------
 
-def _run_job(job_id: str, cid: str, xid: str) -> None:
-    job = jobs[job_id]
+def _start_job(cid: str, xid: str, title: str, kind: str, fn) -> dict:
+    busy = next((j for j in jobs.values() if j["state"] == "running"), None)
+    if busy:
+        raise HTTPException(409, f"Another job is running ({busy.get('title', 'content')}). Wait for it to finish.")
+    job_id = uuid.uuid4().hex[:8]
+    job = jobs[job_id] = {"id": job_id, "cid": cid, "xid": xid, "title": title, "kind": kind, "state": "running",
+                          "log": [], "percent": None, "started": time.time(), "finished": None}
 
     def log(msg: str, pct=None) -> None:
         t = int(time.time() - job["started"])
         job["log"].append(f"[{t // 60:02d}:{t % 60:02d}] {msg}")
         job["percent"] = pct
 
-    try:
+    def run() -> None:
+        try:
+            fn(log, lambda p: job.__setitem__("percent", p))
+            job["state"] = "done"
+        except Exception as e:  # surface any failure in the UI
+            job["state"], job["error"] = "error", str(e)
+            log(f"ERROR: {e}")
+        job["finished"] = time.time()
+
+    threading.Thread(target=run, daemon=True).start()
+    return {"job": job_id}
+
+
+def _generate_fn(cid: str, xid: str):
+    def run(log, pct):
         campaign, item = store.get(cid), store.get_content(cid, xid)
         pick = lambda role: next((_asset_file(cid, a["path"]) for a in campaign["assets"] if a["role"] == role
                                   and a["kind"] == ("audio" if role == "music" else "image")), None)
@@ -290,12 +309,8 @@ def _run_job(job_id: str, cid: str, xid: str) -> None:
         for c in clips:
             c["content"] = xid
         store.add_clips(cid, xid, clips)
-        job["state"] = "done"
         log(f"Finished: {len(clips)} new clips.", 100)
-    except Exception as e:  # surface any failure in the UI
-        job["state"], job["error"] = "error", str(e)
-        log(f"ERROR: {e}")
-    job["finished"] = time.time()
+    return run
 
 
 @app.post("/api/campaigns/{cid}/content/{xid}/generate")
@@ -303,14 +318,7 @@ def generate(cid: str, xid: str):
     item = _content(cid, xid)
     if not item.get("kind"):
         raise HTTPException(400, "Add a video or YouTube link first.")
-    busy = next((j for j in jobs.values() if j["state"] == "running"), None)
-    if busy:  # the server has two cores: one job at a time
-        raise HTTPException(409, f"Another job is running ({busy.get('title', 'content')}). Wait for it to finish.")
-    job_id = uuid.uuid4().hex[:8]
-    jobs[job_id] = {"id": job_id, "cid": cid, "xid": xid, "title": item["title"], "state": "running",
-                    "log": [], "percent": None, "started": time.time(), "finished": None}
-    threading.Thread(target=_run_job, args=(job_id, cid, xid), daemon=True).start()
-    return {"job": job_id}
+    return _start_job(cid, xid, item["title"], "generate", _generate_fn(cid, xid))
 
 
 def _view(job: dict) -> dict:
@@ -337,10 +345,91 @@ def running():
     return {"cid": j["cid"], "xid": j["xid"]} if j else {}
 
 
+# ---------------- editor: preview copy, AI suggestions, export, batch ----------------
+
+def _clip(cid: str, xid: str, file: str) -> tuple[dict, dict]:
+    item = _content(cid, xid)
+    try:
+        return item, edits.clip_of(item, Path(file).name)
+    except KeyError:
+        raise HTTPException(404, "Clip not found")
+
+
+@app.get("/api/campaigns/{cid}/content/{xid}/clips/{file}/editor")
+def editor_get(cid: str, xid: str, file: str):
+    item, clip = _clip(cid, xid, file)
+    if not item.get("kind"):
+        raise HTTPException(400, "This content has no source video to edit.")
+    try:
+        return edits.editor_info(cid, item, clip, _campaign(cid))
+    except Exception as e:
+        raise HTTPException(502, f"Couldn't load the editor data: {str(e)[:200]}")
+
+
+@app.post("/api/campaigns/{cid}/content/{xid}/clips/{file}/editor/prepare")
+def editor_prepare(cid: str, xid: str, file: str):
+    item, clip = _clip(cid, xid, file)
+    lo, hi = edits.editor_range(item, clip)
+    if edits.proxy_ready(cid, clip, lo, hi):
+        return {"ready": True}
+    return _start_job(cid, xid, f"Preview of {clip['title']}", "proxy",
+                      lambda log, pct: (edits.ensure_proxy(cid, item, clip, log, pct), log("Preview ready.", 100)))
+
+
+@app.post("/api/campaigns/{cid}/content/{xid}/clips/{file}/editor/suggest")
+def editor_suggest(cid: str, xid: str, file: str, body: dict = Body(...)):
+    item, clip = _clip(cid, xid, file)
+    try:
+        return edits.propose(cid, item, clip, list(body.get("modes", [])), _campaign(cid))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Suggestion failed: {str(e)[:200]}")
+
+
+@app.post("/api/campaigns/{cid}/content/{xid}/clips/{file}/editor/export")
+def editor_export(cid: str, xid: str, file: str, body: dict = Body(...)):
+    item, clip = _clip(cid, xid, file)
+    lo, hi = edits.editor_range(item, clip)
+    try:
+        edl = edits.clean_edl(body.get("edl") or {}, lo, hi)  # fail fast, before queuing a render
+    except (ValueError, KeyError, TypeError) as e:
+        raise HTTPException(400, str(e))
+    return _start_job(cid, xid, f"Export of {clip['title']}", "export",
+                      lambda log, pct: edits.export_edl(cid, xid, clip["file"], edl, log, pct))
+
+
+@app.post("/api/campaigns/{cid}/content/{xid}/batch-edit")
+def batch_edit(cid: str, xid: str, body: dict = Body(...)):
+    item = _content(cid, xid)
+    files = [Path(f).name for f in body.get("files", [])][:30]
+    modes = [m for m in body.get("modes", []) if m in edits.TAGS]
+    have = {c["file"] for c in item["clips"]}
+    if not files or any(f not in have for f in files):
+        raise HTTPException(400, "Pick one or more clips.")
+    if not modes or {"hook", "loop"} <= set(modes):
+        raise HTTPException(400, "Choose a style (Punchline first or Seamless loop, plus an optional keyword).")
+    return _start_job(cid, xid, f"Edit {len(files)} clips", "batch",
+                      lambda log, pct: (edits.batch_edit(cid, xid, files, modes, log, pct), log("All done.", 100)))
+
+
+@app.get("/editorfile/{cid}/{name}/proxy.mp4")
+def editor_proxy(cid: str, name: str):
+    try:
+        path = store.cdir(cid) / "_work" / "edit" / re.sub(r"[^\w\-]", "_", name) / "proxy.mp4"
+    except KeyError:
+        raise HTTPException(404)
+    if not path.exists():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="video/mp4")
+
+
 # ---------------- clips ----------------
 
 @app.patch("/api/campaigns/{cid}/content/{xid}/clips/{filename}")
 def patch_clip(cid: str, xid: str, filename: str, body: dict = Body(...)):
+    if "draft" in body and len(str(body["draft"])) > 20000:
+        raise HTTPException(413, "Draft too large")
     try:
         return store.update_clip(cid, xid, filename, body)
     except KeyError:

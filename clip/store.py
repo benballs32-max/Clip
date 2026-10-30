@@ -25,7 +25,7 @@ DEFAULTS = {
     "clips_per_video": 8, "frame_mode": "blur",
     "logo_position": "tr", "logo_scale": 0.18, "music_volume": 0.12,
 }
-CLIP_FIELDS = ("status", "notes", "payout", "post_url")
+CLIP_FIELDS = ("status", "notes", "payout", "post_url", "draft")
 
 
 def cdir(cid: str) -> Path:
