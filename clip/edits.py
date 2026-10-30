@@ -216,7 +216,9 @@ def propose(cid: str, item: dict, clip: dict, modes: list[str], campaign: dict, 
     notes: list[str] = []
     body = {"start": cs, "end": ce}
     edl = {"segments": [body], "overlays": [], "captions": True, "tags": []}
-    ids = [i for i, w in enumerate(words) if w["start"] >= cs - 0.05 and w["end"] <= ce + 0.3]
+    # words inside the clip: judged by their midpoint, so the next sentence's first word (which can start
+    # a few hundredths after the cut) is not mistaken for a tiny final sentence
+    ids = [i for i, w in enumerate(words) if cs - 0.05 <= (w["start"] + w["end"]) / 2 <= ce]
     bw = [words[i] for i in ids]
     sents = _sentences(bw) if bw else []
     if not bw and modes & {"hook", "loop"}:
@@ -229,7 +231,8 @@ def propose(cid: str, item: dict, clip: dict, modes: list[str], campaign: dict, 
             import anthropic
             usage: list[str] = []
             ai = _ask_ai(anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY), usage, campaign, clip, bw, sents, modes)
-            notes.append(f"Claude chose the lines ({usage[0]}). {ai.get('why', '')}".strip())
+            why = re.sub(r"\s+", " ", str(ai.get("why", ""))).strip()
+            notes.append(f"Claude chose the lines ({usage[0]}). {why[:150]}{'…' if len(why) > 150 else ''}".strip())
         except Exception as e:
             notes.append(f"AI suggestion failed ({str(e)[:80]}); used a simple default.")
     elif modes:
