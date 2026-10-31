@@ -188,7 +188,7 @@ def create_content(cid: str, title: str, source: dict | None = None) -> dict:
 def update_content(cid: str, xid: str, fields: dict) -> dict:
     """Rename, or set the source (kind/url/file/duration...)."""
     allowed = {"title", "kind", "url", "file", "yt_title", "channel", "license", "duration",
-               "width", "height", "size", "package"}
+               "width", "height", "size", "package", "thumbnails"}
     with _lock:
         data = get(cid)
         item = _item(data, xid)

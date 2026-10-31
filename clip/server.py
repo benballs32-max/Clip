@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
-from . import assets, briefs, config, edits, qa, render, repurpose, store, transcribe, youtube
+from . import assets, briefs, config, edits, qa, render, repurpose, store, thumbnails, transcribe, youtube
 from .pipeline import process_source, process_youtube
 
 app = FastAPI(title="Clip")
@@ -208,6 +208,8 @@ def delete_content(cid: str, xid: str):
     item = _content(cid, xid)
     if any(j["cid"] == cid and j.get("xid") == xid and j["state"] == "running" for j in jobs.values()):
         raise HTTPException(409, "Generation is running for this content")
+    for t in item.get("thumbnails", []):
+        (store.cdir(cid) / "clips" / t["file"]).unlink(missing_ok=True)
     for c in item["clips"]:  # the clips and their caption files
         for ext in (".mp4", ".txt"):
             (store.cdir(cid) / "clips" / Path(c["file"]).with_suffix(ext).name).unlink(missing_ok=True)
@@ -317,6 +319,10 @@ def _generate_fn(cid: str, xid: str):
         store.add_clips(cid, xid, clips)
         if campaign.get("type") == "repurpose":
             _package_fn(cid, xid)(log, pct)
+            try:
+                _thumbs_fn(cid, xid)(log, pct)
+            except Exception as e:  # the clips and copy are already saved; don't fail the whole job
+                log(f"Thumbnails skipped: {str(e)[:160]}")
         log(f"Finished: {len(clips)} new clips.", 100)
     return run
 
@@ -347,6 +353,36 @@ def _package_fn(cid: str, xid: str):
         copy.update(repurpose.platform_copy(todo, campaign, log))
         store.update_content(cid, xid, {"package": {**pkg, "clips": copy}})
     return run
+
+
+def _thumbs_fn(cid: str, xid: str):
+    """Pick the best frames of the full video and set the thumbnail text on them."""
+    def run(log, pct):
+        if not thumbnails.available():
+            raise RuntimeError("Pillow or face detection isn't installed on the server.")
+        campaign, item = store.get(cid), store.get_content(cid, xid)
+        out_dir = store.cdir(cid) / "clips"
+        for old in item.get("thumbnails", []):
+            (out_dir / old["file"]).unlink(missing_ok=True)
+        if item["kind"] == "youtube":
+            src = youtube.stream_spec(youtube.normalize(item["url"])[1])
+        else:
+            src = _content_file(cid, item["file"])
+        texts = (item.get("package") or {}).get("thumbnail_texts", [])
+        focus = [(k["start"] + k["end"]) / 2 for k in item["clips"]]
+        title = ((item.get("package") or {}).get("titles") or [item.get("yt_title") or item["title"]])[0]
+        made = thumbnails.make(src, item.get("duration") or 0, focus, title, texts, campaign,
+                               store.cdir(cid) / "_work" / f"thumb_{xid}", out_dir, xid, log)
+        store.update_content(cid, xid, {"thumbnails": made})
+    return run
+
+
+@app.post("/api/campaigns/{cid}/content/{xid}/thumbnails")
+def make_thumbnails(cid: str, xid: str):
+    item = _content(cid, xid)
+    if not item.get("kind"):
+        raise HTTPException(400, "Add a video or YouTube link first.")
+    return _start_job(cid, xid, item["title"], "thumbnails", _thumbs_fn(cid, xid))
 
 
 @app.post("/api/campaigns/{cid}/content/{xid}/package")

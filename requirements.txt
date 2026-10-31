@@ -10,3 +10,4 @@ deno>=2
 fonttools>=4.40
 opencv-python-headless>=4.8
 numpy>=1.24
+pillow>=10.0

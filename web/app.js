@@ -368,9 +368,13 @@ function packageCard(c, x) {
       <h3>Tags</h3><div class="chips">${(p.tags || []).map(t => `<span class="chip">${esc(t)}</span>`).join("")}</div>
       <div class="row" style="margin-top:14px"><button class="btn sm cpy" data-t="${esc((p.tags || []).join(", "))}">${I("copy", 13)}Copy tags</button></div>`
     : `<p class="hint" style="margin:0">${x.clips.length ? "Not written yet." : "Written after the clips are generated."}</p>`;
+  const th = x.thumbnails || [], thumbs = x.clips.length || th.length ? `
+    <h3>Thumbnails</h3>${th.length ? `<div class="thumbs">${th.map(t => `<figure><a href="/media/${c.id}/${encodeURIComponent(t.file)}" target="_blank"><img src="/media/${c.id}/${encodeURIComponent(t.file)}?v=${Math.round(t.t)}" alt="${esc(t.text)}"></a>
+        <figcaption><span>${esc(t.why)}</span><a class="btn sm ic" href="/media/${c.id}/${encodeURIComponent(t.file)}" download title="Download">${I("download", 14)}</a></figcaption></figure>`).join("")}</div>` : `<p class="hint">Not made yet.</p>`}
+    <div class="row"><button class="btn sm" id="thumbRedo">${th.length ? "Make new thumbnails" : "Make thumbnails"}</button></div>` : "";
   return `<section class="card pkg"><header><h2>YouTube package</h2><div class="row" style="gap:8px">
       ${x.clips.length ? `<button class="btn sm" id="pkgRedo">${p.titles ? "Rewrite" : "Write titles and captions"}</button><a class="btn sm primary" href="/api/campaigns/${c.id}/content/${x.id}/download.zip" download>${I("download", 14)}Download everything</a>` : ""}</div></header>
-    <p class="hint">For the full video. Per-platform captions for each short are on its card below.</p>${body}</section>`;
+    <p class="hint">For the full video. Per-platform captions for each short are on its card below.</p>${body}${thumbs}</section>`;
 }
 
 function renderContent(c, x) {
@@ -437,6 +441,10 @@ function renderContent(c, x) {
   }
   $$(".tab").forEach(t => t.onclick = () => { clipFilter = t.dataset.f; applyFilter(); });
   $$(".cpy").forEach(b => b.onclick = () => navigator.clipboard.writeText(b.dataset.t).then(() => toast("Copied")));
+  if ($("#thumbRedo")) $("#thumbRedo").onclick = async () => {
+    try { await api(`/api/campaigns/${c.id}/content/${x.id}/thumbnails`, { method: "POST" }); busy = { cid: c.id, xid: x.id }; sidebar(); attachJob(c.id, x.id); toast("Making thumbnails. Follow it in Activity."); }
+    catch (e) { toast(e.message, "bad"); }
+  };
   if ($("#pkgRedo")) $("#pkgRedo").onclick = async () => {
     try { await api(`/api/campaigns/${c.id}/content/${x.id}/package`, { method: "POST", body: { redo: !!(x.package && x.package.titles) } }); busy = { cid: c.id, xid: x.id }; sidebar(); attachJob(c.id, x.id); toast("Writing. Follow it in Activity."); }
     catch (e) { toast(e.message, "bad"); }

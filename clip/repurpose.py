@@ -147,6 +147,10 @@ def build_zip(item: dict, clips_dir: Path, out) -> None:
                        + "\n".join(pkg.get("thumbnail_texts", [])) + "\n")
             z.writestr("youtube/description.txt", youtube_description(pkg) + "\n")
             z.writestr("youtube/tags.txt", ", ".join(pkg.get("tags", [])) + "\n")
+        for t in item.get("thumbnails", []):
+            f = clips_dir / t["file"]
+            if f.exists():
+                z.write(f, f"youtube/thumbnails/{t['file']}")
         for k in item.get("clips", []):
             f = clips_dir / k["file"]
             if not f.exists() or k.get("status") == "rejected":
