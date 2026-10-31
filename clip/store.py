@@ -21,6 +21,7 @@ _lock = threading.Lock()
 _ID = re.compile(r"[0-9a-f]{8}")
 
 DEFAULTS = {
+    "type": "campaign", "audience": "", "tone": "",  # type "repurpose" = one-video-to-every-platform workspace
     "name": "", "platform": "TikTok", "rate_cpm": 1.0, "budget_note": "", "rules": "",
     "hashtags": [], "disclosure": "#ad", "min_seconds": 15, "max_seconds": 60,
     "clips_per_video": 8, "frame_mode": "blur",
@@ -88,8 +89,14 @@ def list_all() -> list[dict]:
     return sorted(out, key=lambda c: c["created"])
 
 
+REPURPOSE = {"platform": "Any", "rate_cpm": 0.0, "disclosure": "", "clips_per_video": 6, "min_seconds": 20,
+             "max_seconds": 60, "frame_mode": "follow"}  # starting settings for a Repurpose project
+
+
 def create(fields: dict) -> dict:
     cid = uuid.uuid4().hex[:8]
+    if fields.get("type") == "repurpose":
+        fields = {**REPURPOSE, **fields}
     with _lock:
         (cdir(cid) / "assets").mkdir(parents=True)
         (cdir(cid) / "clips").mkdir()
@@ -181,7 +188,7 @@ def create_content(cid: str, title: str, source: dict | None = None) -> dict:
 def update_content(cid: str, xid: str, fields: dict) -> dict:
     """Rename, or set the source (kind/url/file/duration...)."""
     allowed = {"title", "kind", "url", "file", "yt_title", "channel", "license", "duration",
-               "width", "height", "size"}
+               "width", "height", "size", "package"}
     with _lock:
         data = get(cid)
         item = _item(data, xid)

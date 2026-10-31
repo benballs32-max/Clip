@@ -66,7 +66,7 @@ async function render() {
   sidebar();
   const c = data.find(c => c.id === cid);
   jobLoop++;  // stop any previous progress loop
-  if (!c) return void ($("#main").innerHTML = `<div class="welcome"><h1>Clip</h1><p>${data.length ? "Pick a campaign on the left." : "Create your first campaign to get started."}</p></div>`);
+  if (!c) return void ($("#main").innerHTML = `<div class="welcome"><h1>Clip</h1><p>${data.length ? "Pick a campaign or a Repurpose project on the left." : "Create a campaign for pay-per-view clipping, or a Repurpose project to turn one video into posts for every platform."}</p></div>`);
   const x = xid && c.content.find(x => x.id === xid);
   if (xid && !x) return go(cid);
   $("#main").scrollTop = 0;
@@ -76,7 +76,8 @@ async function render() {
 
 // ---------- sidebar ----------
 function sidebar() {
-  $("#campaigns").innerHTML = data.map(c => {
+  const rp = c => c.type === "repurpose";
+  const list = (cs, empty) => cs.map(c => {
     const open = expanded.has(c.id), on = route.cid === c.id && !route.xid;
     const items = c.content.map(x => `
       <a class="ci ${route.xid === x.id ? "on" : ""}" href="#/${c.id}/${x.id}" title="${esc(x.title)}">
@@ -85,13 +86,15 @@ function sidebar() {
         ${x.clips.length ? `<span class="n">${x.clips.length}</span>` : ""}</a>`).join("");
     return `<div class="camp ${open ? "open" : ""}">
       <a class="ch ${on ? "on" : ""}" href="#/${c.id}"><button class="caret" data-toggle="${c.id}" aria-label="Show or hide content">${I("chevron", 14)}</button>
-        <span class="t"><b>${esc(c.name)}</b><small>${esc(c.platform)} · $${c.rate_cpm}/1k views</small></span>${busy.cid === c.id ? '<span class="dot" title="Generating"></span>' : ""}</a>
+        <span class="t"><b>${esc(c.name)}</b><small>${rp(c) ? "Every platform" : `${esc(c.platform)} · $${c.rate_cpm}/1k views`}</small></span>${busy.cid === c.id ? '<span class="dot" title="Generating"></span>' : ""}</a>
       <div class="items-wrap"><div class="items-in"><div class="items">${items}
         <button class="addc" data-add="${c.id}">${I("plus", 15)}<span>Add content</span></button></div></div></div></div>`;
-  }).join("") || '<p class="empty">No campaigns yet.</p>';
+  }).join("") || `<p class="empty">${empty}</p>`;
+  $("#campaigns").innerHTML = list(data.filter(c => !rp(c)), "No campaigns yet.");
+  $("#projects").innerHTML = list(data.filter(rp), "No projects yet.");
 }
 
-$("#campaigns").onclick = e => {  // campaigns and content are real links; only the buttons need code
+$("#campaigns").onclick = $("#projects").onclick = e => {  // campaigns and content are real links; only the buttons need code
   const t = e.target.closest("[data-toggle]");
   if (t) {
     e.preventDefault();
@@ -108,6 +111,13 @@ $("#new").onclick = async () => {
   const name = prompt("Campaign name?");
   if (!name) return;
   const c = await api("/api/campaigns", { method: "POST", body: { name } });
+  go(c.id);
+};
+
+$("#newrp").onclick = async () => {
+  const name = prompt("Project name (your channel or brand)?");
+  if (!name) return;
+  const c = await api("/api/campaigns", { method: "POST", body: { name, type: "repurpose" } });
   go(c.id);
 };
 
@@ -130,19 +140,20 @@ const field = (label, input, cls = "") => `<label class="field ${cls}">${label}$
 const opts = (list, cur) => list.map(([v, t]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${t}</option>`).join("");
 
 function renderCampaign(c) {
+  const rp = c.type === "repurpose";
   const briefs = c.assets.filter(a => a.role === "brief");
   const clips = c.content.flatMap(x => x.clips);
   const count = s => clips.filter(x => x.status === s).length;
   const earned = clips.reduce((a, x) => a + (+x.payout || 0), 0);
   $("#main").innerHTML = `<div class="page">
-    <header class="ph"><div><h1>${esc(c.name)}</h1><p class="sub">${esc(c.platform)} · $${c.rate_cpm} per 1,000 views</p></div>
+    <header class="ph"><div><h1>${esc(c.name)}</h1><p class="sub">${rp ? "Repurpose · YouTube, TikTok, Instagram Reels, YouTube Shorts" : `${esc(c.platform)} · $${c.rate_cpm} per 1,000 views`}</p></div>
       <button class="btn primary" id="addc">${I("plus", 15)}Add content</button></header>
     <div class="tiles">
       <div class="tile"><span>Content</span><b>${c.content.length}</b></div><div class="tile"><span>Clips</span><b>${clips.length}</b></div>
-      <div class="tile"><span>Approved</span><b>${count("approved")}</b></div><div class="tile"><span>Posted</span><b>${count("posted")}</b></div>
-      <div class="tile money"><span>Earned</span><b>${money(earned)}</b></div></div>
+      ${rp ? "" : `<div class="tile"><span>Approved</span><b>${count("approved")}</b></div><div class="tile"><span>Posted</span><b>${count("posted")}</b></div>`}
+      ${rp ? "" : `<div class="tile money"><span>Earned</span><b>${money(earned)}</b></div>`}</div>
 
-    <section class="card">
+    ${rp ? "" : `<section class="card">
       <header><h2>Brief</h2>${briefs.length ? `<button class="btn sm" id="reread">Re-read brief</button>` : ""}</header>
       <p class="hint">Drop the campaign brief and Claude fills in the rules, tags and lengths below. You can edit anything afterwards.</p>
       <div class="drop" id="briefDrop"><span class="ico">${I("upload", 22)}</span><span>Drop the brief here or <u>click to choose</u></span><small>PDF, Word or text</small>
@@ -150,11 +161,15 @@ function renderCampaign(c) {
       <div class="row" style="margin-top:10px"><input id="gdoc" placeholder="…or paste a Google Docs link (shared with “anyone with the link”)" style="flex:1;min-width:240px"><button class="btn" id="gdocBtn">Read link</button></div>
       ${briefs.length ? `<div class="chips">${briefs.map(a => `<span class="chip">${I("file", 13)}${esc(a.path)}</span>`).join("")}</div>` : ""}
       <div class="note" id="briefMsg"></div>
-    </section>
+    </section>`}
 
     <form class="card" id="f">
       <header><h2>Settings</h2></header>
-      <div class="group"><h3>Campaign</h3><div class="grid">
+      ${rp ? `<div class="group"><h3>Your channel</h3><div class="grid">
+        ${field("Name", `<input name="name" value="${esc(c.name)}">`)}
+        ${field("Audience", `<input name="audience" value="${esc(c.audience)}" placeholder="e.g. first-time founders">`)}
+        ${field("Tone of voice", `<input name="tone" value="${esc(c.tone)}" placeholder="e.g. direct, dry humour, no hype">`)}
+        ${field(`Instructions <small>Titles, descriptions and captions follow this. Also guides which moments become clips.</small>`, `<textarea name="rules" style="min-height:120px" placeholder="e.g. Always end descriptions with a link to my newsletter. Never use the word 'game-changer'.">${esc(c.rules)}</textarea>`, "full")}</div></div>` : `<div class="group"><h3>Campaign</h3><div class="grid">
         ${field("Name", `<input name="name" value="${esc(c.name)}">`)}
         ${field("Platform", `<select name="platform">${opts(["TikTok", "Instagram", "YouTube Shorts", "Any"].map(p => [p, p]), c.platform)}</select>`)}
         ${field("Rate ($ per 1,000 views)", `<input name="rate_cpm" type="number" step="0.01" value="${c.rate_cpm}">`)}
@@ -163,7 +178,7 @@ function renderCampaign(c) {
         ${field(`Brief and rules <small>Claude uses this to pick clips and write captions.</small>`, `<textarea name="rules" style="min-height:170px">${esc(c.rules)}</textarea>`, "full")}</div></div>
       <div class="group"><h3>Post caption</h3><div class="grid">
         ${field("Hashtags (space separated)", `<input name="hashtags" value="${esc(c.hashtags.join(" "))}" placeholder="#example #tags">`)}
-        ${field("Disclosure tag", `<input name="disclosure" value="${esc(c.disclosure)}">`)}</div></div>
+        ${field("Disclosure tag", `<input name="disclosure" value="${esc(c.disclosure)}">`)}</div></div>`}
       <div class="group"><h3>Clip style</h3><div class="grid three">
         ${field("Min seconds", `<input name="min_seconds" type="number" value="${c.min_seconds}">`)}
         ${field("Max seconds", `<input name="max_seconds" type="number" value="${c.max_seconds}">`)}
@@ -189,7 +204,7 @@ function renderCampaign(c) {
       <div class="savebar"><button class="btn primary" id="save" disabled>Save changes</button><span class="state" id="saved">All changes saved</span></div>
     </form>
 
-    ${checksCard(c)}
+    ${rp ? "" : checksCard(c)}
 
     <section class="card">
       <header><h2>Logo, music and other files</h2></header>
@@ -210,7 +225,7 @@ function renderCampaign(c) {
     <div class="danger-zone"><button id="del" class="btn danger">${I("trash", 15)}Delete campaign</button></div>
   </div>`;
 
-  bindChecks(c);
+  rp || bindChecks(c);
   const form = $("#f"), save = $("#save"), state = $("#saved");
   // subtitle style: font list, presets and a live preview from the real renderer
   const capKeys = ["cap_font", "cap_size", "cap_color", "cap_highlight", "cap_style", "cap_pos", "cap_words"];
@@ -241,9 +256,9 @@ function renderCampaign(c) {
   form.onsubmit = async e => {
     e.preventDefault();
     const d = Object.fromEntries(new FormData(form));
-    d.hashtags = d.hashtags.split(/\s+/).filter(Boolean);
-    ["rate_cpm", "logo_scale", "music_volume"].forEach(k => d[k] = d[k] === "" ? null : parseFloat(d[k]));
-    ["min_seconds", "max_seconds", "clips_per_video", "cap_size", "cap_words"].forEach(k => d[k] = d[k] === "" ? null : parseInt(d[k]));
+    if (d.hashtags !== undefined) d.hashtags = d.hashtags.split(/\s+/).filter(Boolean);
+    ["rate_cpm", "logo_scale", "music_volume"].forEach(k => d[k] === undefined || (d[k] = d[k] === "" ? null : parseFloat(d[k])));
+    ["min_seconds", "max_seconds", "clips_per_video", "cap_size", "cap_words"].forEach(k => d[k] === undefined || (d[k] = d[k] === "" ? null : parseInt(d[k])));
     d.cap_upper = form.elements.cap_upper.checked; d.cap_pop = form.elements.cap_pop.checked;
     Object.keys(d).forEach(k => d[k] === null && delete d[k]);  // blank = keep the current value
     try {
@@ -262,7 +277,8 @@ function renderCampaign(c) {
   $("#dirIn").onchange = e => uploadAssets(c.id, [...e.target.files].map(f => ({ file: f, path: f.webkitRelativePath || f.name })));
   $("#fileIn").onchange = e => uploadAssets(c.id, [...e.target.files].map(f => ({ file: f, path: f.name })));
   dropZone($("#drop"), async items => uploadAssets(c.id, await collect(items)));
-  const bf = $("#briefFile");
+  const bf = $("#briefFile");  // (absent on Repurpose projects)
+  if (!rp) {
   $("#briefDrop").onclick = () => bf.click();
   dropZone($("#briefDrop"), async items => uploadAssets(c.id, (await collect(items)).slice(0, 1), true));
   bf.onchange = () => uploadAssets(c.id, [...bf.files].map(f => ({ file: f, path: f.name })), true);
@@ -273,6 +289,7 @@ function renderCampaign(c) {
     } catch (e) { $("#briefMsg").textContent = e.message; }
   };
   if ($("#reread")) $("#reread").onclick = () => analyze(c.id);
+  }
   $$(".role").forEach(sel => sel.onchange = async () => {
     await api(`/api/campaigns/${c.id}/assets`, { method: "PATCH", body: { path: sel.dataset.path, role: sel.value } });
     render();
@@ -342,7 +359,22 @@ async function analyze(cid) {
 // ---------- content page: one video, its clips, its activity ----------
 let picked = new Set();   // clip files ticked for editing
 
+function packageCard(c, x) {
+  const p = x.package || {}, row = (t, label = "Copy") => `<div class="row-item"><span>${esc(t)}</span><button class="btn sm cpy" data-t="${esc(t)}">${I("copy", 13)}${label}</button></div>`;
+  const body = p.titles ? `
+      <h3>Title options</h3>${p.titles.map(t => row(t)).join("")}
+      <h3>Description with chapters</h3><pre>${esc(p.full_description || p.description)}</pre><button class="btn sm cpy" data-t="${esc(p.full_description || p.description)}">${I("copy", 13)}Copy description</button>
+      <h3>Thumbnail text ideas</h3><div class="chips">${(p.thumbnail_texts || []).map(t => `<span class="chip">${esc(t)}</span>`).join("")}</div>
+      <h3>Tags</h3><div class="chips">${(p.tags || []).map(t => `<span class="chip">${esc(t)}</span>`).join("")}</div>
+      <div class="row" style="margin-top:14px"><button class="btn sm cpy" data-t="${esc((p.tags || []).join(", "))}">${I("copy", 13)}Copy tags</button></div>`
+    : `<p class="hint" style="margin:0">${x.clips.length ? "Not written yet." : "Written after the clips are generated."}</p>`;
+  return `<section class="card pkg"><header><h2>YouTube package</h2><div class="row" style="gap:8px">
+      ${x.clips.length ? `<button class="btn sm" id="pkgRedo">${p.titles ? "Rewrite" : "Write titles and captions"}</button><a class="btn sm primary" href="/api/campaigns/${c.id}/content/${x.id}/download.zip" download>${I("download", 14)}Download everything</a>` : ""}</div></header>
+    <p class="hint">For the full video. Per-platform captions for each short are on its card below.</p>${body}</section>`;
+}
+
 function renderContent(c, x) {
+  const rp = c.type === "repurpose";
   picked = new Set();
   const clips = x.clips;
   const count = s => clips.filter(k => k.status === s).length;
@@ -363,14 +395,15 @@ function renderContent(c, x) {
             ? `<span>${esc(x.channel)}</span><span>${dur(x.duration)}</span>${x.license ? `<span>${esc(x.license)}</span>` : ""}<a href="${esc(x.url)}" target="_blank" rel="noopener">Open on YouTube ${I("link", 12)}</a>`
             : `<span>${dur(x.duration)}</span><span>${x.width}×${x.height}</span><span>${fmt(x.size)}</span>`}</div></div>
         <div class="go">${generate_btn}<p class="hint">${clips.length ? "Adds moments that don't overlap your existing clips." : "Transcribes, picks the best moments, then cuts and captions them."}</p></div></div>`;
-  $("#main").innerHTML = `<div class="cols"><div class="left">
+  $("#main").innerHTML = `<div class="cols ${rp ? "rp" : ""}"><div class="left">
     <a class="crumb" href="#/${c.id}">${I("back", 14)}${esc(c.name)}</a>
     <header class="ph"><div><h1>${esc(x.title)}<button id="ren" class="icon-btn" title="Rename">${I("pencil", 15)}</button></h1></div></header>
     <div class="tiles"><div class="tile"><span>Clips</span><b>${clips.length}</b></div><div class="tile"><span>Approved</span><b>${count("approved")}</b></div>
       <div class="tile"><span>Posted</span><b>${count("posted")}</b></div><div class="tile money"><span>Earned</span><b>${money(earned)}</b></div></div>
     <section class="card">${source}</section>
-    <div class="bar-head"><h2>Clips</h2><div class="row" style="gap:10px">${clips.length ? `<button class="btn sm" id="qaall" title="Check every clip against the campaign's rules">${I("shield", 14)}Check all</button>` : ""}<div class="tabs" id="tabs">${["all", ...STATUSES].map(s => `<button class="tab ${clipFilter === s ? "on" : ""}" data-f="${s}">${s[0].toUpperCase() + s.slice(1)}<em></em></button>`).join("")}</div></div></div>
-    <div class="clips" id="clips">${clips.map(clipCard(c.id)).join("") || `<div class="empty-state"><b>No clips yet</b>${x.kind ? "Press Generate to create them." : "Add a source above first."}</div>`}</div>
+    ${rp ? packageCard(c, x) : ""}
+    <div class="bar-head"><h2>${rp ? "Short clips" : "Clips"}</h2><div class="row" style="gap:10px">${clips.length ? `<button class="btn sm" id="qaall" title="Check every clip against the campaign's rules">${I("shield", 14)}Check all</button>` : ""}<div class="tabs" id="tabs">${["all", ...STATUSES].map(s => `<button class="tab ${clipFilter === s ? "on" : ""}" data-f="${s}">${s[0].toUpperCase() + s.slice(1)}<em></em></button>`).join("")}</div></div></div>
+    <div class="clips" id="clips">${clips.map(clipCard(c.id, rp && x.package && x.package.clips)).join("") || `<div class="empty-state"><b>No clips yet</b>${x.kind ? "Press Generate to create them." : "Add a source above first."}</div>`}</div>
     <div class="danger-zone" style="margin-top:32px"><button id="delx" class="btn danger">${I("trash", 15)}Delete this content</button></div>
     <div class="selbar" id="selbar" hidden><span id="selcount"></span><button class="btn primary sm" id="editsel">${I("scissors", 14)}Edit</button><button class="btn sm" id="checksel">${I("shield", 14)}Check</button><button class="btn ghost sm" id="clearsel">Clear</button></div>
     </div>
@@ -403,6 +436,16 @@ function renderContent(c, x) {
     $("#gen").onclick = () => generate(c.id, x.id);
   }
   $$(".tab").forEach(t => t.onclick = () => { clipFilter = t.dataset.f; applyFilter(); });
+  $$(".cpy").forEach(b => b.onclick = () => navigator.clipboard.writeText(b.dataset.t).then(() => toast("Copied")));
+  if ($("#pkgRedo")) $("#pkgRedo").onclick = async () => {
+    try { await api(`/api/campaigns/${c.id}/content/${x.id}/package`, { method: "POST", body: { redo: !!(x.package && x.package.titles) } }); busy = { cid: c.id, xid: x.id }; sidebar(); attachJob(c.id, x.id); toast("Writing. Follow it in Activity."); }
+    catch (e) { toast(e.message, "bad"); }
+  };
+  $$(".ptabs").forEach(box => $$("button", box).forEach(b => b.onclick = () => {  // per-platform copy on a clip card
+    const el = box.closest(".clip"), t = JSON.parse(box.dataset.text);
+    $$("button", box).forEach(o => o.classList.toggle("on", o === b));
+    $(".cap p", el).textContent = t[b.dataset.p]; el.dataset.platform = b.dataset.p;
+  }));
   $$(".clip").forEach(el => {
     const f = encodeURIComponent(el.dataset.file), patch = body =>
       api(`/api/campaigns/${c.id}/content/${x.id}/clips/${f}`, { method: "PATCH", body });
@@ -504,7 +547,8 @@ async function runQA(c, x, k, chip) {
   } catch (e) { toast(e.message, "bad"); if (chip) { chip.disabled = false; chip.outerHTML = qaChip(k); } }
 }
 
-const clipCard = cid => k => `
+const PLATFORM_LABEL = { tiktok: "TikTok", instagram: "Reels", shorts: "Shorts" };
+const clipCard = (cid, copy) => k => `
   <article class="clip ${k.status}" data-file="${esc(k.file)}" data-status="${k.status}">
     <div class="vid"><video src="/media/${cid}/${encodeURIComponent(k.file)}?v=${Math.round(k.start * 100)}-${Math.round(k.end * 100)}-${Math.round((k.duration || 0) * 10)}" controls preload="metadata"></video>
       <span class="badge">#${k.file.match(/_(\d+)(?:_e(\d+))?\.mp4$/)?.slice(1).filter(Boolean).join(" · edit ") ?? "?"}</span>
@@ -513,7 +557,8 @@ const clipCard = cid => k => `
       <h4>${esc(k.title)}</h4>
       <div class="cmeta"><span>${tc(k.start)}–${tc(k.end)}</span><span>·</span><span>${Math.round(k.duration || k.end - k.start)}s</span>${k.score ? `<span>·</span><span class="score">score ${k.score}</span>` : ""}</div>
       <div class="tags">${(k.tags || []).map(t => `<span class="tag t-${t}">${TAGL[t] || t}</span>`).join("")}${qaChip(k)}</div>
-      <div class="cap" title="Click to expand"><p>${esc(k.caption)}</p></div>
+      ${copy && copy[k.file] && copy[k.file].text ? `<div class="ptabs" data-text="${esc(JSON.stringify(copy[k.file].text))}">${Object.keys(copy[k.file].text).map((p, i) => `<button data-p="${p}" class="${i ? "" : "on"}">${PLATFORM_LABEL[p] || p}</button>`).join("")}</div>` : ""}
+      <div class="cap" title="Click to expand"><p>${esc(copy && copy[k.file] && copy[k.file].text ? Object.values(copy[k.file].text)[0] : k.caption)}</p></div>
       <div class="seg">${STATUSES.map(s => `<button data-s="${s}" class="${k.status === s ? "on" : ""}">${s[0].toUpperCase() + s.slice(1)}</button>`).join("")}</div>
       <div class="foot"><label class="pay" title="Amount paid"><span>$</span><input type="number" step="0.01" placeholder="paid" value="${k.payout || ""}" aria-label="Amount paid"></label>
         <button class="btn sm cp" title="Copy caption">${I("copy", 13)}Copy</button>

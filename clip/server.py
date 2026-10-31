@@ -1,7 +1,9 @@
 """FastAPI app: campaigns (brief + settings), content items (one video each), generation, clip review."""
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -11,8 +13,9 @@ from fastapi import Body, FastAPI, Form, HTTPException, UploadFile
 from fastapi import Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 
-from . import assets, briefs, config, edits, qa, render, store, youtube
+from . import assets, briefs, config, edits, qa, render, repurpose, store, transcribe, youtube
 from .pipeline import process_source, process_youtube
 
 app = FastAPI(title="Clip")
@@ -312,8 +315,60 @@ def _generate_fn(cid: str, xid: str):
         for c in clips:
             c["content"] = xid
         store.add_clips(cid, xid, clips)
+        if campaign.get("type") == "repurpose":
+            _package_fn(cid, xid)(log, pct)
         log(f"Finished: {len(clips)} new clips.", 100)
     return run
+
+
+def _segments(cid: str, item: dict) -> list[dict]:
+    """The transcript made during generation (cached on disk, so this is instant)."""
+    if item["kind"] == "youtube":
+        vid, url = youtube.normalize(item["url"])
+        return youtube.transcript(url, vid, store.cdir(cid) / "_work") or []
+    return transcribe.transcribe(_content_file(cid, item["file"]))
+
+
+def _package_fn(cid: str, xid: str):
+    """YouTube package for the full video plus TikTok / Reels / Shorts copy for every clip."""
+    def run(log, pct):
+        campaign, item = store.get(cid), store.get_content(cid, xid)
+        if not config.ANTHROPIC_API_KEY:
+            return log("No API key set, so no titles or captions were written.")
+        old = item.get("package") or {}
+        pkg = {k: v for k, v in old.items() if k != "clips"}
+        if not pkg.get("titles"):
+            pkg = repurpose.youtube_package(_segments(cid, item), item.get("yt_title") or item["title"],
+                                            item.get("duration") or 0, campaign, log)
+            if pkg:
+                pkg["full_description"] = repurpose.youtube_description(pkg)
+        copy = dict(old.get("clips", {}))
+        todo = [k for k in item["clips"] if k["file"] not in copy]
+        copy.update(repurpose.platform_copy(todo, campaign, log))
+        store.update_content(cid, xid, {"package": {**pkg, "clips": copy}})
+    return run
+
+
+@app.post("/api/campaigns/{cid}/content/{xid}/package")
+def make_package(cid: str, xid: str, body: dict = Body(default={})):
+    """Write (or, with redo, rewrite) the titles and per-platform copy without re-cutting clips."""
+    item = _content(cid, xid)
+    if not item.get("kind"):
+        raise HTTPException(400, "Add a video or YouTube link first.")
+    if body.get("redo"):
+        store.update_content(cid, xid, {"package": {}})
+    return _start_job(cid, xid, item["title"], "package", _package_fn(cid, xid))
+
+
+@app.get("/api/campaigns/{cid}/content/{xid}/download.zip")
+def download_zip(cid: str, xid: str):
+    item = _content(cid, xid)
+    name = re.sub(r"[^\w\-]+", "_", item["title"]).strip("_") or "content"
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)  # on disk, not in memory: clips are big
+    with tmp:
+        repurpose.build_zip(item, store.cdir(cid) / "clips", tmp)
+    return FileResponse(tmp.name, media_type="application/zip", filename=f"{name}.zip",
+                        background=BackgroundTask(os.unlink, tmp.name))
 
 
 @app.post("/api/campaigns/{cid}/content/{xid}/generate")
